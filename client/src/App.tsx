@@ -10,6 +10,8 @@ import LandingPage from "@/pages/landing";
 import AuthPage from "@/pages/auth-page";
 import UserDashboard from "@/pages/dashboard";
 import AdminDashboard from "@/pages/admin";
+import BotDetailPage from "@/pages/bot-detail";
+import AiChat from "@/components/ai-chat";
 
 function ProtectedRoute({ component: Component }: { component: () => JSX.Element }) {
   const { user, isLoading } = useAuth();
@@ -49,6 +51,9 @@ function AppRouter() {
       <Route path="/admin">
         <AdminRoute component={AdminDashboard} />
       </Route>
+      <Route path="/bot/:botType">
+        <ProtectedRoute component={BotDetailPage} />
+      </Route>
       <Route component={NotFound} />
     </Switch>
   );
@@ -62,6 +67,7 @@ function App() {
         <AuthProvider>
           <Router hook={useHashLocation}>
             <AppRouter />
+            <AiChat />
           </Router>
         </AuthProvider>
       </TooltipProvider>

@@ -36,7 +36,7 @@ export default function AuthPage() {
   // Redirect if already logged in
   useEffect(() => {
     if (!authLoading && user) {
-      setLocation(user.role === "admin" ? "/admin" : "/dashboard");
+      setLocation("/dashboard");
     }
   }, [user, authLoading, setLocation]);
 
@@ -121,7 +121,7 @@ export default function AuthPage() {
                       <Label htmlFor="login-email">Email</Label>
                       <Input
                         id="login-email"
-                        type="email"
+                        type="text"
                         placeholder="you@example.com"
                         value={loginEmail}
                         onChange={(e) => setLoginEmail(e.target.value)}
@@ -232,7 +232,7 @@ export default function AuthPage() {
               )}
 
               <p className="text-xs text-muted-foreground mt-4 text-center">
-                Owner? Use <span className="font-medium">admin@tw</span>
+                Owner? Use <span className="font-medium">shyam.gor@outlook.com</span>
               </p>
             </CardContent>
           </Card>

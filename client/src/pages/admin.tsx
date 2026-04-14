@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/table";
 import {
   Bot, Users, CreditCard, DollarSign, BarChart3,
-  LogOut, ExternalLink, Shield,
+  LogOut, ExternalLink, Shield, LayoutDashboard, Globe,
 } from "lucide-react";
 
 interface AdminStats {
@@ -87,13 +87,33 @@ export default function AdminDashboard() {
       {/* Header */}
       <header className="border-b border-border/60 bg-background/80 backdrop-blur-sm sticky top-0 z-50">
         <div className="max-w-7xl mx-auto flex items-center justify-between h-14 px-4 sm:px-6">
-          <div className="flex items-center gap-2">
-            <Bot className="h-6 w-6 text-primary" />
-            <span className="font-bold text-base tracking-tight text-primary">ToolsYourWay</span>
-            <Badge variant="secondary" className="text-[10px] ml-1">
-              <Shield className="h-3 w-3 mr-0.5" />
-              Admin
-            </Badge>
+          <div className="flex items-center gap-3">
+            <button className="flex items-center gap-2" onClick={() => setLocation("/")} data-testid="link-home">
+              <Bot className="h-6 w-6 text-primary" />
+              <span className="font-bold text-base tracking-tight text-primary">ToolsYourWay</span>
+            </button>
+            <div className="flex items-center bg-muted rounded-full p-0.5 ml-2" data-testid="view-switcher">
+              <button
+                className="flex items-center gap-1 text-xs font-medium px-3 py-1 rounded-full text-muted-foreground hover:text-foreground transition-colors"
+                onClick={() => setLocation("/dashboard")}
+                data-testid="switch-to-dashboard"
+              >
+                <LayoutDashboard className="h-3 w-3" />
+                Dashboard
+              </button>
+              <span className="flex items-center gap-1 text-xs font-semibold px-3 py-1 rounded-full bg-primary text-primary-foreground">
+                <Shield className="h-3 w-3" />
+                Admin
+              </span>
+            </div>
+            <button
+              className="flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full bg-muted text-muted-foreground hover:text-foreground transition-colors ml-1"
+              onClick={() => setLocation("/")}
+              data-testid="link-view-site"
+            >
+              <Globe className="h-3 w-3" />
+              View Site
+            </button>
           </div>
           <div className="flex items-center gap-3">
             <span className="text-sm text-muted-foreground hidden sm:inline">{user?.email}</span>

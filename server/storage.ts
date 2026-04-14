@@ -1,113 +1,190 @@
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/libsql";
+import { createClient } from "@libsql/client";
 import { eq, desc, count, sql } from "drizzle-orm";
 import {
-  users, subscriptions, botConfigs,
+  users, subscriptions, botConfigs, scheduledPosts, invoices, generatedMedia,
   type User, type InsertUser,
   type Subscription, type InsertSubscription,
   type BotConfig, type InsertBotConfig,
+  type ScheduledPost, type InsertScheduledPost,
+  type Invoice, type InsertInvoice,
+  type GeneratedMedia,
 } from "@shared/schema";
 import bcrypt from "bcryptjs";
 
-const sqlite = new Database("toolsyourway.db");
-sqlite.pragma("journal_mode = WAL");
+const client = createClient({ url: "file:toolsyourway.db" });
+export const db = drizzle(client);
 
-export const db = drizzle(sqlite);
+// Auto-create tables on startup
+async function initDb() {
+  await client.executeMultiple(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      password TEXT,
+      auth_provider TEXT NOT NULL DEFAULT 'email',
+      auth_provider_id TEXT,
+      role TEXT NOT NULL DEFAULT 'user',
+      plan TEXT DEFAULT 'none',
+      avatar_url TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS subscriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      plan TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      payment_gateway TEXT,
+      payment_id TEXT,
+      amount INTEGER,
+      start_date TEXT NOT NULL DEFAULT (datetime('now')),
+      end_date TEXT
+    );
+    CREATE TABLE IF NOT EXISTS generated_media (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      type TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      url TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'completed',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS bot_configs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      bot_type TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'inactive',
+      config TEXT,
+      last_run_at TEXT,
+      metrics TEXT
+    );
+    CREATE TABLE IF NOT EXISTS scheduled_posts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      content TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'scheduled',
+      scheduled_for TEXT,
+      published_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS invoices (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      invoice_number TEXT NOT NULL,
+      client_name TEXT NOT NULL,
+      client_email TEXT,
+      items TEXT NOT NULL,
+      subtotal INTEGER NOT NULL,
+      gst INTEGER NOT NULL,
+      total INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+}
+
+// Exported so routes can await it before seeding
+export const dbReady = initDb();
 
 // ============================================================
-// STORAGE INTERFACE
+// STORAGE INTERFACE (all async — works with libsql)
 // ============================================================
 export interface IStorage {
-  // Users
-  getUser(id: number): User | undefined;
-  getUserByEmail(email: string): User | undefined;
-  getUserByProvider(provider: string, providerId: string): User | undefined;
-  createUser(data: InsertUser): User;
-  updateUser(id: number, data: Partial<InsertUser>): User | undefined;
-  getAllUsers(): User[];
-  getUserCount(): number;
+  getUser(id: number): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
+  getUserByProvider(provider: string, providerId: string): Promise<User | undefined>;
+  createUser(data: InsertUser): Promise<User>;
+  updateUser(id: number, data: Partial<InsertUser>): Promise<User | undefined>;
+  getAllUsers(): Promise<User[]>;
+  getUserCount(): Promise<number>;
 
-  // Subscriptions
-  getSubscription(id: number): Subscription | undefined;
-  getActiveSubscription(userId: number): Subscription | undefined;
-  createSubscription(data: InsertSubscription): Subscription;
-  updateSubscription(id: number, data: Partial<InsertSubscription>): Subscription | undefined;
-  getAllSubscriptions(): Subscription[];
-  getRevenueStats(): { totalRevenue: number; activeCount: number; planBreakdown: Record<string, number> };
+  getSubscription(id: number): Promise<Subscription | undefined>;
+  getActiveSubscription(userId: number): Promise<Subscription | undefined>;
+  createSubscription(data: InsertSubscription): Promise<Subscription>;
+  updateSubscription(id: number, data: Partial<InsertSubscription>): Promise<Subscription | undefined>;
+  getAllSubscriptions(): Promise<Subscription[]>;
+  getRevenueStats(): Promise<{ totalRevenue: number; activeCount: number; planBreakdown: Record<string, number> }>;
 
-  // Bot configs
-  getBotConfigs(userId: number): BotConfig[];
-  upsertBotConfig(data: InsertBotConfig): BotConfig;
+  getBotConfigs(userId: number): Promise<BotConfig[]>;
+  upsertBotConfig(data: InsertBotConfig): Promise<BotConfig>;
 
-  // Seed admin
-  seedAdmin(): void;
+  getScheduledPosts(userId: number): Promise<ScheduledPost[]>;
+  createScheduledPost(data: InsertScheduledPost): Promise<ScheduledPost>;
+  updateScheduledPost(id: number, data: Partial<InsertScheduledPost>): Promise<ScheduledPost | undefined>;
+
+  getInvoices(userId: number): Promise<Invoice[]>;
+  createInvoice(data: InsertInvoice): Promise<Invoice>;
+  updateInvoice(id: number, data: Partial<InsertInvoice>): Promise<Invoice | undefined>;
+
+  seedAdmin(): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
-  // ---- USERS ----
-  getUser(id: number): User | undefined {
-    return db.select().from(users).where(eq(users.id, id)).get();
+  async getUser(id: number) {
+    const rows = await db.select().from(users).where(eq(users.id, id));
+    return rows[0];
   }
 
-  getUserByEmail(email: string): User | undefined {
-    return db.select().from(users).where(eq(users.email, email.toLowerCase())).get();
+  async getUserByEmail(email: string) {
+    const rows = await db.select().from(users).where(eq(users.email, email.toLowerCase()));
+    return rows[0];
   }
 
-  getUserByProvider(provider: string, providerId: string): User | undefined {
-    return db
-      .select().from(users)
-      .where(sql`${users.authProvider} = ${provider} AND ${users.authProviderId} = ${providerId}`)
-      .get();
+  async getUserByProvider(provider: string, providerId: string) {
+    const rows = await db.select().from(users)
+      .where(sql`${users.authProvider} = ${provider} AND ${users.authProviderId} = ${providerId}`);
+    return rows[0];
   }
 
-  createUser(data: InsertUser): User {
-    return db.insert(users).values({
-      ...data,
-      email: data.email.toLowerCase(),
-    }).returning().get();
+  async createUser(data: InsertUser) {
+    const rows = await db.insert(users).values({ ...data, email: data.email.toLowerCase() }).returning();
+    return rows[0];
   }
 
-  updateUser(id: number, data: Partial<InsertUser>): User | undefined {
-    return db.update(users).set(data).where(eq(users.id, id)).returning().get();
+  async updateUser(id: number, data: Partial<InsertUser>) {
+    const rows = await db.update(users).set(data).where(eq(users.id, id)).returning();
+    return rows[0];
   }
 
-  getAllUsers(): User[] {
-    return db.select().from(users).orderBy(desc(users.id)).all();
+  async getAllUsers() {
+    return db.select().from(users).orderBy(desc(users.id));
   }
 
-  getUserCount(): number {
-    const result = db.select({ count: count() }).from(users).get();
-    return result?.count ?? 0;
+  async getUserCount() {
+    const rows = await db.select({ count: count() }).from(users);
+    return rows[0]?.count ?? 0;
   }
 
-  // ---- SUBSCRIPTIONS ----
-  getSubscription(id: number): Subscription | undefined {
-    return db.select().from(subscriptions).where(eq(subscriptions.id, id)).get();
+  async getSubscription(id: number) {
+    const rows = await db.select().from(subscriptions).where(eq(subscriptions.id, id));
+    return rows[0];
   }
 
-  getActiveSubscription(userId: number): Subscription | undefined {
-    return db
-      .select().from(subscriptions)
-      .where(sql`${subscriptions.userId} = ${userId} AND ${subscriptions.status} = 'active'`)
-      .get();
+  async getActiveSubscription(userId: number) {
+    const rows = await db.select().from(subscriptions)
+      .where(sql`${subscriptions.userId} = ${userId} AND ${subscriptions.status} = 'active'`);
+    return rows[0];
   }
 
-  createSubscription(data: InsertSubscription): Subscription {
-    // Also update user plan
-    db.update(users).set({ plan: data.plan }).where(eq(users.id, data.userId)).run();
-    return db.insert(subscriptions).values(data).returning().get();
+  async createSubscription(data: InsertSubscription) {
+    await db.update(users).set({ plan: data.plan }).where(eq(users.id, data.userId));
+    const rows = await db.insert(subscriptions).values(data).returning();
+    return rows[0];
   }
 
-  updateSubscription(id: number, data: Partial<InsertSubscription>): Subscription | undefined {
-    return db.update(subscriptions).set(data).where(eq(subscriptions.id, id)).returning().get();
+  async updateSubscription(id: number, data: Partial<InsertSubscription>) {
+    const rows = await db.update(subscriptions).set(data).where(eq(subscriptions.id, id)).returning();
+    return rows[0];
   }
 
-  getAllSubscriptions(): Subscription[] {
-    return db.select().from(subscriptions).orderBy(desc(subscriptions.id)).all();
+  async getAllSubscriptions() {
+    return db.select().from(subscriptions).orderBy(desc(subscriptions.id));
   }
 
-  getRevenueStats() {
-    const allSubs = db.select().from(subscriptions).where(eq(subscriptions.status, "active")).all();
+  async getRevenueStats() {
+    const allSubs = await db.select().from(subscriptions).where(eq(subscriptions.status, "active"));
     let totalRevenue = 0;
     const planBreakdown: Record<string, number> = {};
     for (const sub of allSubs) {
@@ -117,35 +194,103 @@ export class DatabaseStorage implements IStorage {
     return { totalRevenue, activeCount: allSubs.length, planBreakdown };
   }
 
-  // ---- BOT CONFIGS ----
-  getBotConfigs(userId: number): BotConfig[] {
-    return db.select().from(botConfigs).where(eq(botConfigs.userId, userId)).all();
+  async getBotConfigs(userId: number) {
+    return db.select().from(botConfigs).where(eq(botConfigs.userId, userId));
   }
 
-  upsertBotConfig(data: InsertBotConfig): BotConfig {
-    const existing = db.select().from(botConfigs)
-      .where(sql`${botConfigs.userId} = ${data.userId} AND ${botConfigs.botType} = ${data.botType}`)
-      .get();
-    if (existing) {
-      return db.update(botConfigs).set(data).where(eq(botConfigs.id, existing.id)).returning().get();
+  async upsertBotConfig(data: InsertBotConfig) {
+    const existing = await db.select().from(botConfigs)
+      .where(sql`${botConfigs.userId} = ${data.userId} AND ${botConfigs.botType} = ${data.botType}`);
+    if (existing[0]) {
+      const rows = await db.update(botConfigs).set(data).where(eq(botConfigs.id, existing[0].id)).returning();
+      return rows[0];
     }
-    return db.insert(botConfigs).values(data).returning().get();
+    const rows = await db.insert(botConfigs).values(data).returning();
+    return rows[0];
   }
 
-  // ---- SEED ADMIN ----
+  async getScheduledPosts(userId: number) {
+    return db.select().from(scheduledPosts).where(eq(scheduledPosts.userId, userId));
+  }
+
+  async createScheduledPost(data: InsertScheduledPost) {
+    const rows = await db.insert(scheduledPosts).values(data).returning();
+    return rows[0];
+  }
+
+  async updateScheduledPost(id: number, data: Partial<InsertScheduledPost>) {
+    const rows = await db.update(scheduledPosts).set(data).where(eq(scheduledPosts.id, id)).returning();
+    return rows[0];
+  }
+
+  async getInvoices(userId: number) {
+    return db.select().from(invoices).where(eq(invoices.userId, userId));
+  }
+
+  async createInvoice(data: InsertInvoice) {
+    const rows = await db.insert(invoices).values(data).returning();
+    return rows[0];
+  }
+
+  async updateInvoice(id: number, data: Partial<InsertInvoice>) {
+    const rows = await db.update(invoices).set(data).where(eq(invoices.id, id)).returning();
+    return rows[0];
+  }
+
+  // ---- MEDIA ----
+  async getMedia(userId: number) {
+    return db.select().from(generatedMedia).where(eq(generatedMedia.userId, userId)).orderBy(desc(generatedMedia.id));
+  }
+
+  async createMedia(data: { userId: number; type: string; prompt: string; url: string; status: string }) {
+    const rows = await db.insert(generatedMedia).values(data).returning();
+    return rows[0];
+  }
+
   async seedAdmin() {
-    const existing = this.getUserByEmail("admin@tw");
-    if (!existing) {
-      const hashedPassword = await bcrypt.hash("admin@1234", 10);
-      this.createUser({
-        email: "admin@tw",
-        name: "Admin (Owner)",
+    // Owner admin account (same credentials as owner test account)
+    const adminExists = await this.getUserByEmail("shyam.gor@outlook.com");
+    if (!adminExists) {
+      // Admin account will be created below in the owner section
+    } else if (adminExists.role !== "admin") {
+      // Upgrade to admin if not already
+      await this.updateUser(adminExists.id, { role: "admin" });
+    }
+
+    // Owner test account (free Premium — for testing)
+    const ownerExists = await this.getUserByEmail("shyam.gor@outlook.com");
+    if (!ownerExists) {
+      const hashedPassword = await bcrypt.hash("Passw0rd", 10);
+      const user = await this.createUser({
+        email: "shyam.gor@outlook.com",
+        name: "Shyam Gor",
         password: hashedPassword,
         authProvider: "email",
         role: "admin",
         plan: "premium",
       });
-      console.log("✅ Admin user seeded: admin@tw");
+      // Create a free Premium subscription
+      await db.insert(subscriptions).values({
+        userId: user.id,
+        plan: "premium",
+        status: "active",
+        paymentGateway: "owner-comp",
+        paymentId: "FREE-OWNER",
+        amount: 0,
+        endDate: "2099-12-31T00:00:00.000Z",
+      });
+      // Seed all 9 bots active
+      for (const botType of ["marketing", "data", "email", "sales", "hr", "finance", "legal", "seo", "support"]) {
+        await this.upsertBotConfig({
+          userId: user.id,
+          botType,
+          status: "active",
+          config: JSON.stringify({}),
+          metrics: JSON.stringify({ tasks: 0, successRate: 0 }),
+          lastRunAt: new Date().toISOString(),
+        });
+      }
+      console.log("✅ Owner account seeded: shyam.gor@outlook.com (Admin + Premium, free)");
     }
   }
 }

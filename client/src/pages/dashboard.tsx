@@ -8,9 +8,11 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { Link } from "wouter";
 import {
   Bot, Megaphone, Database, Mail, TrendingUp, Users,
-  LogOut, Crown, Calendar, Zap, ArrowUpRight,
+  LogOut, Crown, Calendar, Zap, ArrowUpRight, Shield, LayoutDashboard,
+  IndianRupee, Scale, Search, Headphones,
 } from "lucide-react";
 
 const BOT_META: Record<string, { icon: typeof Bot; label: string; color: string }> = {
@@ -19,6 +21,10 @@ const BOT_META: Record<string, { icon: typeof Bot; label: string; color: string 
   email: { icon: Mail, label: "Email Bot", color: "#C98A1A" },
   sales: { icon: TrendingUp, label: "Sales Bot", color: "#1E1650" },
   hr: { icon: Users, label: "HR Bot", color: "#E9A820" },
+  finance: { icon: IndianRupee, label: "Finance Bot", color: "#16803C" },
+  legal: { icon: Scale, label: "Legal Bot", color: "#7C3AED" },
+  seo: { icon: Search, label: "SEO Bot", color: "#DC6B18" },
+  support: { icon: Headphones, label: "Support Bot", color: "#0891B2" },
 };
 
 interface DashboardData {
@@ -88,16 +94,34 @@ export default function UserDashboard() {
     : "—";
 
   // All 5 bot types — show even if user doesn't have bots yet
-  const allBotTypes = ["marketing", "data", "email", "sales", "hr"];
+  const allBotTypes = ["marketing", "data", "email", "sales", "hr", "finance", "legal", "seo", "support"];
 
   return (
     <div className="min-h-screen bg-background" data-testid="dashboard-page">
       {/* Header */}
       <header className="border-b border-border/60 bg-background/80 backdrop-blur-sm sticky top-0 z-50">
         <div className="max-w-6xl mx-auto flex items-center justify-between h-14 px-4 sm:px-6">
-          <div className="flex items-center gap-2">
-            <Bot className="h-6 w-6 text-primary" />
-            <span className="font-bold text-base tracking-tight text-primary">ToolsYourWay</span>
+          <div className="flex items-center gap-3">
+            <Link href="/" className="flex items-center gap-2 no-underline" onClick={(e) => { e.preventDefault(); setLocation("/"); }}>
+              <Bot className="h-6 w-6 text-primary" />
+              <span className="font-bold text-base tracking-tight text-primary">ToolsYourWay</span>
+            </Link>
+            {user?.role === "admin" && (
+              <div className="flex items-center bg-muted rounded-full p-0.5 ml-2" data-testid="view-switcher">
+                <span className="flex items-center gap-1 text-xs font-semibold px-3 py-1 rounded-full bg-primary text-primary-foreground">
+                  <LayoutDashboard className="h-3 w-3" />
+                  Dashboard
+                </span>
+                <button
+                  className="flex items-center gap-1 text-xs font-medium px-3 py-1 rounded-full text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={() => setLocation("/admin")}
+                  data-testid="switch-to-admin"
+                >
+                  <Shield className="h-3 w-3" />
+                  Admin
+                </button>
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-3">
             <span className="text-sm text-muted-foreground hidden sm:inline">{user?.email}</span>
@@ -225,7 +249,12 @@ export default function UserDashboard() {
                   const canToggle = !!botData;
 
                   return (
-                    <Card key={botType} className="border-border/50" data-testid={`card-bot-${botType}`}>
+                    <Card
+                      key={botType}
+                      className="border-border/50 cursor-pointer hover:border-primary/30 hover:shadow-md transition-all"
+                      data-testid={`card-bot-${botType}`}
+                      onClick={() => setLocation(`/bot/${botType}`)}
+                    >
                       <CardContent className="p-4">
                         <div className="flex items-start justify-between mb-3">
                           <div className="flex items-center gap-3">
@@ -248,9 +277,13 @@ export default function UserDashboard() {
                           </div>
                           <Switch
                             checked={isActive}
-                            onCheckedChange={() => canToggle && toggleBot.mutate(botType)}
+                            onCheckedChange={(e) => {
+                              e.stopPropagation?.();
+                              canToggle && toggleBot.mutate(botType);
+                            }}
                             disabled={!canToggle || toggleBot.isPending}
                             data-testid={`switch-bot-${botType}`}
+                            onClick={(e: React.MouseEvent) => e.stopPropagation()}
                           />
                         </div>
                         {botData?.lastRunAt && (
@@ -258,6 +291,7 @@ export default function UserDashboard() {
                             Last run: {new Date(botData.lastRunAt).toLocaleString()}
                           </p>
                         )}
+                        <p className="text-[10px] text-primary/60 mt-2">Click to configure →</p>
                       </CardContent>
                     </Card>
                   );

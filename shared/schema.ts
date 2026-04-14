@@ -33,9 +33,9 @@ export const registerSchema = z.object({
   password: z.string().min(6, "Password must be at least 6 characters"),
 });
 
-// Login form schema
+// Login form schema (allows admin@tw format for owner login)
 export const loginSchema = z.object({
-  email: z.string().email("Valid email required"),
+  email: z.string().min(1, "Email is required"),
   password: z.string().min(1, "Password is required"),
 });
 
@@ -77,3 +77,57 @@ export const botConfigs = sqliteTable("bot_configs", {
 export const insertBotConfigSchema = createInsertSchema(botConfigs).omit({ id: true });
 export type InsertBotConfig = z.infer<typeof insertBotConfigSchema>;
 export type BotConfig = typeof botConfigs.$inferSelect;
+
+// ============================================================
+// GENERATED MEDIA
+// ============================================================
+export const generatedMedia = sqliteTable("generated_media", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull().references(() => users.id),
+  type: text("type").notNull(), // image | video-storyboard
+  prompt: text("prompt").notNull(),
+  url: text("url").notNull(), // image URL or JSON array of frame URLs
+  status: text("status").notNull().default("completed"),
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+export type GeneratedMedia = typeof generatedMedia.$inferSelect;
+
+// ============================================================
+// SCHEDULED POSTS (Marketing Bot)
+// ============================================================
+export const scheduledPosts = sqliteTable("scheduled_posts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull().references(() => users.id),
+  content: text("content").notNull(),
+  platform: text("platform").notNull(),
+  status: text("status").notNull().default("scheduled"), // scheduled | published | failed
+  scheduledFor: text("scheduled_for"),
+  publishedAt: text("published_at"),
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+export const insertScheduledPostSchema = createInsertSchema(scheduledPosts).omit({ id: true, createdAt: true });
+export type InsertScheduledPost = z.infer<typeof insertScheduledPostSchema>;
+export type ScheduledPost = typeof scheduledPosts.$inferSelect;
+
+// ============================================================
+// INVOICES (Finance Bot)
+// ============================================================
+export const invoices = sqliteTable("invoices", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull().references(() => users.id),
+  invoiceNumber: text("invoice_number").notNull(),
+  clientName: text("client_name").notNull(),
+  clientEmail: text("client_email"),
+  items: text("items").notNull(), // JSON
+  subtotal: integer("subtotal").notNull(), // in paise
+  gst: integer("gst").notNull(),
+  total: integer("total").notNull(),
+  status: text("status").notNull().default("draft"), // draft | sent | paid
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+export const insertInvoiceSchema = createInsertSchema(invoices).omit({ id: true, createdAt: true });
+export type InsertInvoice = z.infer<typeof insertInvoiceSchema>;
+export type Invoice = typeof invoices.$inferSelect;
