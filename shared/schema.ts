@@ -102,6 +102,10 @@ export const socialConnections = sqliteTable("social_connections", {
   platform: text("platform").notNull(), // linkedin | instagram | tiktok | facebook | twitter
   accountName: text("account_name"), // display name or handle
   accountId: text("account_id"), // platform user ID
+  accountType: text("account_type").default("profile"), // profile | page | group
+  pageId: text("page_id"), // selected page/company ID (for LinkedIn/Facebook)
+  pageName: text("page_name"), // selected page name
+  pages: text("pages"), // JSON array of available pages [{id, name, type}]
   accessToken: text("access_token"), // encrypted in production
   refreshToken: text("refresh_token"),
   status: text("status").notNull().default("connected"), // connected | expired | disconnected

@@ -631,17 +631,62 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
       }
 
       // MVP mode: create connection record directly (for demo/testing)
+      // For LinkedIn and Facebook, return available pages so user can choose
+      const hasPages = ["linkedin", "facebook"].includes(platform);
+      const demoPages = hasPages ? JSON.stringify([
+        { id: `page_1_${Date.now()}`, name: `${req.user!.name}'s ${platform === "linkedin" ? "Company" : "Business"} Page`, type: "page" },
+        { id: `page_2_${Date.now()}`, name: `${platform === "linkedin" ? "My Startup" : "Brand Page"}`, type: "page" },
+        { id: `profile_${Date.now()}`, name: `${req.user!.name} (Personal Profile)`, type: "profile" },
+      ]) : undefined;
+
       const connection = await storage.connectSocial({
         userId: req.user!.id,
         platform,
         accountName: accountName || `${req.user!.name}'s ${platform}`,
         accountId: `demo_${Date.now()}`,
+        pages: demoPages,
+        accountType: hasPages ? "pending" : "profile", // pending = needs page selection
       });
 
-      res.json({ connection, demo: !config?.clientId, message: config?.clientId ? undefined : `Connected in demo mode. Add ${platform.toUpperCase()} API credentials to .env for real posting.` });
+      res.json({
+        connection,
+        needsPageSelection: hasPages,
+        pages: hasPages ? JSON.parse(demoPages!) : undefined,
+        demo: !config?.clientId,
+        message: config?.clientId ? undefined : `Connected in demo mode. Add ${platform.toUpperCase()} API credentials to .env for real posting.`,
+      });
     } catch (err: any) {
       console.error("Social connect error:", err);
       res.status(500).json({ message: err.message || "Connection failed" });
+    }
+  });
+
+  // Select which page to post to (LinkedIn Company Page / Facebook Page / Personal Profile)
+  app.post("/api/social/select-page", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { platform, pageId, pageName, accountType } = req.body;
+      if (!platform || !pageId) return res.status(400).json({ message: "Platform and pageId are required" });
+
+      const connections = await storage.getSocialConnections(req.user!.id);
+      const conn = connections.find((c: any) => c.platform === platform);
+      if (!conn) return res.status(404).json({ message: "Connection not found" });
+
+      await storage.connectSocial({
+        userId: req.user!.id,
+        platform,
+        accountName: pageName || conn.accountName,
+        accountId: conn.accountId,
+        pageId,
+        pageName,
+        accountType: accountType || "page",
+        pages: conn.pages,
+        accessToken: conn.accessToken,
+        refreshToken: conn.refreshToken,
+      });
+
+      res.json({ success: true, pageName });
+    } catch (err: any) {
+      res.status(500).json({ message: "Page selection failed" });
     }
   });
 

@@ -368,6 +368,10 @@ export default function BotDetailPage() {
     enabled: botType === "marketing",
   });
 
+  const [pagePickerOpen, setPagePickerOpen] = useState(false);
+  const [pagePickerPlatform, setPagePickerPlatform] = useState("");
+  const [pagePickerPages, setPagePickerPages] = useState<Array<{id: string; name: string; type: string}>>([]);
+
   const connectSocial = useMutation({
     mutationFn: async (platform: string) => {
       const res = await apiRequest("POST", "/api/social/connect", { platform });
@@ -375,7 +379,13 @@ export default function BotDetailPage() {
     },
     onSuccess: (data) => {
       if (data.redirect) {
-        window.location.href = data.redirect; // Real OAuth redirect
+        window.location.href = data.redirect;
+      } else if (data.needsPageSelection && data.pages) {
+        // Show page picker for LinkedIn/Facebook
+        setPagePickerPlatform(data.connection?.platform || "");
+        setPagePickerPages(data.pages);
+        setPagePickerOpen(true);
+        queryClient.invalidateQueries({ queryKey: ["/api/social/connections"] });
       } else {
         queryClient.invalidateQueries({ queryKey: ["/api/social/connections"] });
         toast({ title: `${data.connection?.platform} connected`, description: data.message });
@@ -383,6 +393,18 @@ export default function BotDetailPage() {
     },
     onError: (err: any) => {
       toast({ title: "Connection failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const selectPage = useMutation({
+    mutationFn: async ({ platform, pageId, pageName, accountType }: { platform: string; pageId: string; pageName: string; accountType: string }) => {
+      const res = await apiRequest("POST", "/api/social/select-page", { platform, pageId, pageName, accountType });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setPagePickerOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/social/connections"] });
+      toast({ title: `Posting to: ${data.pageName}` });
     },
   });
 
@@ -1148,18 +1170,33 @@ export default function BotDetailPage() {
                                   {conn ? (
                                     <div className="text-[10px] text-green-600 font-medium flex items-center gap-1">
                                       <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
-                                      {conn.accountName || "Connected"}
+                                      {conn.pageName ? `${conn.pageName}` : conn.accountName || "Connected"}
+                                      {conn.accountType === "page" && <span className="text-[8px] text-muted-foreground ml-1">(Page)</span>}
+                                      {conn.accountType === "profile" && <span className="text-[8px] text-muted-foreground ml-1">(Profile)</span>}
+                                      {conn.accountType === "pending" && <span className="text-[8px] text-amber-600 ml-1">— Select page ↓</span>}
                                     </div>
                                   ) : (
                                     <div className="text-[10px] text-muted-foreground">Not connected</div>
                                   )}
                                 </div>
                                 {conn ? (
-                                  <Button variant="ghost" size="sm" className="text-xs h-7 text-red-500 hover:text-red-700 hover:bg-red-50"
-                                    onClick={() => disconnectSocial.mutate(sp.key)}
-                                    disabled={disconnectSocial.isPending}
-                                    data-testid={`disconnect-${sp.key}`}
-                                  >Disconnect</Button>
+                                  <div className="flex flex-col gap-1 items-end">
+                                    {conn.accountType === "pending" && conn.pages && (
+                                      <Button variant="outline" size="sm" className="text-[10px] h-6"
+                                        onClick={() => {
+                                          setPagePickerPlatform(sp.key);
+                                          try { setPagePickerPages(typeof conn.pages === "string" ? JSON.parse(conn.pages) : conn.pages); } catch { setPagePickerPages([]); }
+                                          setPagePickerOpen(true);
+                                        }}
+                                        data-testid={`select-page-${sp.key}`}
+                                      >Select Page</Button>
+                                    )}
+                                    <Button variant="ghost" size="sm" className="text-[10px] h-6 text-red-500 hover:text-red-700 hover:bg-red-50"
+                                      onClick={() => disconnectSocial.mutate(sp.key)}
+                                      disabled={disconnectSocial.isPending}
+                                      data-testid={`disconnect-${sp.key}`}
+                                    >Disconnect</Button>
+                                  </div>
                                 ) : (
                                   <Button variant="outline" size="sm" className="text-xs h-7"
                                     onClick={() => connectSocial.mutate(sp.key)}
@@ -1172,8 +1209,38 @@ export default function BotDetailPage() {
                           })}
                         </div>
                         <div className="mt-3 p-3 rounded-lg bg-muted/50 border border-border">
-                          <p className="text-[10px] text-muted-foreground">Once connected, the Marketing Bot can auto-publish posts to your accounts. Generated content from the Actions tab will be posted directly to your connected platforms.</p>
+                          <p className="text-[10px] text-muted-foreground">Once connected, the Marketing Bot can auto-publish posts to your accounts. For LinkedIn and Facebook, you can choose to post to a Company/Business Page or your personal profile.</p>
                         </div>
+
+                        {/* Page Picker Dialog */}
+                        {pagePickerOpen && (
+                          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setPagePickerOpen(false)}>
+                            <div className="bg-background border border-border rounded-2xl p-6 w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()} data-testid="page-picker-dialog">
+                              <h3 className="text-base font-bold text-foreground mb-1">Where should we post?</h3>
+                              <p className="text-xs text-muted-foreground mb-4">Choose a Page or Profile for {pagePickerPlatform}</p>
+                              <div className="space-y-2">
+                                {pagePickerPages.map((page) => (
+                                  <button
+                                    key={page.id}
+                                    className="w-full flex items-center gap-3 p-3 rounded-xl border border-border hover:border-primary/40 hover:bg-muted/50 transition-all text-left"
+                                    onClick={() => selectPage.mutate({ platform: pagePickerPlatform, pageId: page.id, pageName: page.name, accountType: page.type })}
+                                    data-testid={`page-option-${page.id}`}
+                                  >
+                                    <div className="w-8 h-8 rounded-lg flex items-center justify-center text-sm" style={{ background: page.type === "page" ? "#1E165010" : "#0D9E9810" }}>
+                                      {page.type === "page" ? "🏢" : "👤"}
+                                    </div>
+                                    <div className="flex-1">
+                                      <div className="text-sm font-medium text-foreground">{page.name}</div>
+                                      <div className="text-[10px] text-muted-foreground capitalize">{page.type}</div>
+                                    </div>
+                                    <span className="text-xs text-primary">Select →</span>
+                                  </button>
+                                ))}
+                              </div>
+                              <button className="mt-3 text-xs text-muted-foreground hover:text-foreground w-full text-center py-2" onClick={() => setPagePickerOpen(false)}>Cancel</button>
+                            </div>
+                          </div>
+                        )}
                       </CardContent>
                     </Card>
                   ) : (
