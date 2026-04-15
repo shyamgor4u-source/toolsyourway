@@ -193,6 +193,14 @@ interface DashboardData {
   bots: BotData[];
 }
 
+const SOCIAL_PLATFORMS = [
+  { key: "linkedin", name: "LinkedIn", icon: "💼", bg: "#0A66C215" },
+  { key: "instagram", name: "Instagram", icon: "📷", bg: "#E1306C15" },
+  { key: "facebook", name: "Facebook", icon: "👍", bg: "#1877F215" },
+  { key: "twitter", name: "X / Twitter", icon: "𝕏", bg: "#14171A15" },
+  { key: "tiktok", name: "TikTok", icon: "🎵", bg: "#00000015" },
+];
+
 const LANGUAGES = [
   "English", "Hindi", "Gujarati", "Tamil", "Telugu", "Bengali",
   "Marathi", "Kannada", "Malayalam", "Punjabi", "Arabic", "Chinese",
@@ -348,6 +356,44 @@ export default function BotDetailPage() {
       return res.json();
     },
     enabled: botType === "marketing",
+  });
+
+  // Social connections (Marketing Bot)
+  const { data: socialConns } = useQuery<any[]>({
+    queryKey: ["/api/social/connections"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/social/connections");
+      return res.json();
+    },
+    enabled: botType === "marketing",
+  });
+
+  const connectSocial = useMutation({
+    mutationFn: async (platform: string) => {
+      const res = await apiRequest("POST", "/api/social/connect", { platform });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      if (data.redirect) {
+        window.location.href = data.redirect; // Real OAuth redirect
+      } else {
+        queryClient.invalidateQueries({ queryKey: ["/api/social/connections"] });
+        toast({ title: `${data.connection?.platform} connected`, description: data.message });
+      }
+    },
+    onError: (err: any) => {
+      toast({ title: "Connection failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const disconnectSocial = useMutation({
+    mutationFn: async (platform: string) => {
+      await apiRequest("POST", "/api/social/disconnect", { platform });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/social/connections"] });
+      toast({ title: "Disconnected" });
+    },
   });
 
   // ── Email Bot State ───────────────────────────────────────────────────────
@@ -1077,7 +1123,61 @@ export default function BotDetailPage() {
               {/* ========== SETTINGS TAB ========== */}
               <TabsContent value="settings">
                 <div className="space-y-4">
-                  {/* Connected Channels */}
+                  {/* Social Integrations — Marketing Bot gets real connect/disconnect */}
+                  {botType === "marketing" ? (
+                    <Card data-testid="card-social-integrations">
+                      <CardHeader className="pb-3">
+                        <CardTitle className="text-base flex items-center gap-2">
+                          <Globe className="h-4 w-4" /> Social Media Integrations
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <p className="text-xs text-muted-foreground mb-4">Connect your social accounts so the Marketing Bot can publish content directly to your profiles.</p>
+                        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                          {SOCIAL_PLATFORMS.map((sp) => {
+                            const conn = socialConns?.find((c: any) => c.platform === sp.key && c.status === "connected");
+                            return (
+                              <div key={sp.key} className={`flex items-center gap-3 p-3.5 rounded-xl border transition-all ${
+                                conn ? "border-green-200 bg-green-50/50" : "border-border bg-muted/20 hover:border-primary/30"
+                              }`} data-testid={`social-${sp.key}`}>
+                                <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: sp.bg }}>
+                                  <span className="text-lg">{sp.icon}</span>
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="text-sm font-semibold text-foreground">{sp.name}</div>
+                                  {conn ? (
+                                    <div className="text-[10px] text-green-600 font-medium flex items-center gap-1">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
+                                      {conn.accountName || "Connected"}
+                                    </div>
+                                  ) : (
+                                    <div className="text-[10px] text-muted-foreground">Not connected</div>
+                                  )}
+                                </div>
+                                {conn ? (
+                                  <Button variant="ghost" size="sm" className="text-xs h-7 text-red-500 hover:text-red-700 hover:bg-red-50"
+                                    onClick={() => disconnectSocial.mutate(sp.key)}
+                                    disabled={disconnectSocial.isPending}
+                                    data-testid={`disconnect-${sp.key}`}
+                                  >Disconnect</Button>
+                                ) : (
+                                  <Button variant="outline" size="sm" className="text-xs h-7"
+                                    onClick={() => connectSocial.mutate(sp.key)}
+                                    disabled={connectSocial.isPending}
+                                    data-testid={`connect-${sp.key}`}
+                                  >{sp.icon} Connect</Button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="mt-3 p-3 rounded-lg bg-muted/50 border border-border">
+                          <p className="text-[10px] text-muted-foreground">Once connected, the Marketing Bot can auto-publish posts to your accounts. Generated content from the Actions tab will be posted directly to your connected platforms.</p>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ) : (
+                  /* Non-marketing bots keep the simple channels list */
                   <Card>
                     <CardHeader className="pb-3">
                       <CardTitle className="text-base">Connected Channels</CardTitle>
@@ -1085,21 +1185,16 @@ export default function BotDetailPage() {
                     <CardContent>
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                         {meta.channels.map((ch) => (
-                          <div
-                            key={ch}
-                            className="flex items-center gap-2 p-3 rounded-lg border border-border bg-muted/30 hover:bg-muted/60 transition-colors cursor-pointer"
-                            data-testid={`channel-${ch}`}
-                          >
+                          <div key={ch} className="flex items-center gap-2 p-3 rounded-lg border border-border bg-muted/30 hover:bg-muted/60 transition-colors cursor-pointer" data-testid={`channel-${ch}`}>
                             <div className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
                             <span className="text-xs font-medium text-foreground truncate">{ch}</span>
                           </div>
                         ))}
                       </div>
-                      <p className="text-xs text-muted-foreground mt-3">
-                        Click a channel to configure connection settings. All channels auto-reconnect if disconnected.
-                      </p>
+                      <p className="text-xs text-muted-foreground mt-3">Click a channel to configure connection settings.</p>
                     </CardContent>
                   </Card>
+                  )}
 
                   {/* Schedule */}
                   <Card>

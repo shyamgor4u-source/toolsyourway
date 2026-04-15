@@ -94,6 +94,24 @@ export const generatedMedia = sqliteTable("generated_media", {
 export type GeneratedMedia = typeof generatedMedia.$inferSelect;
 
 // ============================================================
+// SOCIAL CONNECTIONS (Marketing Bot integrations)
+// ============================================================
+export const socialConnections = sqliteTable("social_connections", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull().references(() => users.id),
+  platform: text("platform").notNull(), // linkedin | instagram | tiktok | facebook | twitter
+  accountName: text("account_name"), // display name or handle
+  accountId: text("account_id"), // platform user ID
+  accessToken: text("access_token"), // encrypted in production
+  refreshToken: text("refresh_token"),
+  status: text("status").notNull().default("connected"), // connected | expired | disconnected
+  connectedAt: text("connected_at").notNull().$defaultFn(() => new Date().toISOString()),
+  expiresAt: text("expires_at"),
+});
+
+export type SocialConnection = typeof socialConnections.$inferSelect;
+
+// ============================================================
 // SCHEDULED POSTS (Marketing Bot)
 // ============================================================
 export const scheduledPosts = sqliteTable("scheduled_posts", {

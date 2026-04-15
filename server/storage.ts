@@ -2,13 +2,14 @@ import { drizzle } from "drizzle-orm/libsql";
 import { createClient } from "@libsql/client";
 import { eq, desc, count, sql } from "drizzle-orm";
 import {
-  users, subscriptions, botConfigs, scheduledPosts, invoices, generatedMedia,
+  users, subscriptions, botConfigs, scheduledPosts, invoices, generatedMedia, socialConnections,
   type User, type InsertUser,
   type Subscription, type InsertSubscription,
   type BotConfig, type InsertBotConfig,
   type ScheduledPost, type InsertScheduledPost,
   type Invoice, type InsertInvoice,
   type GeneratedMedia,
+  type SocialConnection,
 } from "@shared/schema";
 import bcrypt from "bcryptjs";
 
@@ -40,6 +41,18 @@ async function initDb() {
       amount INTEGER,
       start_date TEXT NOT NULL DEFAULT (datetime('now')),
       end_date TEXT
+    );
+    CREATE TABLE IF NOT EXISTS social_connections (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      platform TEXT NOT NULL,
+      account_name TEXT,
+      account_id TEXT,
+      access_token TEXT,
+      refresh_token TEXT,
+      status TEXT NOT NULL DEFAULT 'connected',
+      connected_at TEXT NOT NULL DEFAULT (datetime('now')),
+      expires_at TEXT
     );
     CREATE TABLE IF NOT EXISTS generated_media (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -235,6 +248,28 @@ export class DatabaseStorage implements IStorage {
   async updateInvoice(id: number, data: Partial<InsertInvoice>) {
     const rows = await db.update(invoices).set(data).where(eq(invoices.id, id)).returning();
     return rows[0];
+  }
+
+  // ---- SOCIAL CONNECTIONS ----
+  async getSocialConnections(userId: number) {
+    return db.select().from(socialConnections).where(eq(socialConnections.userId, userId));
+  }
+
+  async connectSocial(data: { userId: number; platform: string; accountName?: string; accountId?: string; accessToken?: string; refreshToken?: string; expiresAt?: string }) {
+    // Upsert — replace if same user+platform exists
+    const existing = await db.select().from(socialConnections)
+      .where(sql`${socialConnections.userId} = ${data.userId} AND ${socialConnections.platform} = ${data.platform}`);
+    if (existing[0]) {
+      const rows = await db.update(socialConnections).set({ ...data, status: "connected" }).where(eq(socialConnections.id, existing[0].id)).returning();
+      return rows[0];
+    }
+    const rows = await db.insert(socialConnections).values(data).returning();
+    return rows[0];
+  }
+
+  async disconnectSocial(userId: number, platform: string) {
+    await db.update(socialConnections).set({ status: "disconnected", accessToken: null, refreshToken: null })
+      .where(sql`${socialConnections.userId} = ${userId} AND ${socialConnections.platform} = ${platform}`);
   }
 
   // ---- MEDIA ----

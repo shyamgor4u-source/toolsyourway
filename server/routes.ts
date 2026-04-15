@@ -575,6 +575,88 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
   });
 
   // ============================================================
+  // SOCIAL CONNECTIONS (Marketing Bot integrations)
+  // ============================================================
+  app.get("/api/social/connections", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const connections = await storage.getSocialConnections(req.user!.id);
+      res.json(connections);
+    } catch (err: any) {
+      res.status(500).json({ message: "Failed to fetch connections" });
+    }
+  });
+
+  // Connect a social platform (simulates OAuth callback)
+  // In production, each platform has its own OAuth flow:
+  // - LinkedIn: /api/social/linkedin/auth → LinkedIn OAuth → callback with code → exchange for token
+  // - Same for Instagram (Meta), TikTok, Facebook, Twitter/X
+  // For MVP: stores connection record. Real OAuth URLs added when API keys are configured.
+  app.post("/api/social/connect", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { platform, accountName } = req.body;
+      if (!platform) return res.status(400).json({ message: "Platform is required" });
+
+      const validPlatforms = ["linkedin", "instagram", "tiktok", "facebook", "twitter"];
+      if (!validPlatforms.includes(platform)) {
+        return res.status(400).json({ message: "Invalid platform" });
+      }
+
+      // Check if real OAuth is configured for this platform
+      const oauthConfig: Record<string, { clientId?: string; authUrl?: string }> = {
+        linkedin: {
+          clientId: process.env.LINKEDIN_CLIENT_ID,
+          authUrl: process.env.LINKEDIN_CLIENT_ID
+            ? `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${process.env.LINKEDIN_CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.BASE_URL || "http://localhost:5000")}/api/social/linkedin/callback&scope=openid%20profile%20w_member_social`
+            : undefined,
+        },
+        facebook: {
+          clientId: process.env.FACEBOOK_APP_ID,
+          authUrl: process.env.FACEBOOK_APP_ID
+            ? `https://www.facebook.com/v18.0/dialog/oauth?client_id=${process.env.FACEBOOK_APP_ID}&redirect_uri=${encodeURIComponent(process.env.BASE_URL || "http://localhost:5000")}/api/social/facebook/callback&scope=pages_manage_posts,pages_read_engagement`
+            : undefined,
+        },
+        twitter: {
+          clientId: process.env.TWITTER_CLIENT_ID,
+          authUrl: undefined, // Twitter OAuth 2.0 PKCE flow — more complex
+        },
+        instagram: { clientId: process.env.FACEBOOK_APP_ID, authUrl: undefined }, // Uses Facebook Graph API
+        tiktok: { clientId: process.env.TIKTOK_CLIENT_KEY, authUrl: undefined },
+      };
+
+      const config = oauthConfig[platform];
+
+      // If real OAuth is configured, return the auth URL for redirect
+      if (config?.authUrl) {
+        return res.json({ redirect: config.authUrl });
+      }
+
+      // MVP mode: create connection record directly (for demo/testing)
+      const connection = await storage.connectSocial({
+        userId: req.user!.id,
+        platform,
+        accountName: accountName || `${req.user!.name}'s ${platform}`,
+        accountId: `demo_${Date.now()}`,
+      });
+
+      res.json({ connection, demo: !config?.clientId, message: config?.clientId ? undefined : `Connected in demo mode. Add ${platform.toUpperCase()} API credentials to .env for real posting.` });
+    } catch (err: any) {
+      console.error("Social connect error:", err);
+      res.status(500).json({ message: err.message || "Connection failed" });
+    }
+  });
+
+  app.post("/api/social/disconnect", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { platform } = req.body;
+      if (!platform) return res.status(400).json({ message: "Platform is required" });
+      await storage.disconnectSocial(req.user!.id, platform);
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ message: "Disconnect failed" });
+    }
+  });
+
+  // ============================================================
   // AI IMAGE & VIDEO GENERATION
   // ============================================================
   app.post("/api/media/generate-image", requireAuth, async (req: Request, res: Response) => {
