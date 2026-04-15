@@ -31,14 +31,14 @@ export async function registerRoutes(server: Server, app: Express) {
   app.use(
     session({
       secret: process.env.SESSION_SECRET || "toolsyourway-secret-change-in-prod",
-      resave: false,
+      resave: true,
       saveUninitialized: false,
+      rolling: true, // Reset cookie expiry on every request — keeps session alive
       store: new MemoryStore({ checkPeriod: 86400000 }),
       cookie: {
-        maxAge: 7 * 24 * 60 * 60 * 1000,
+        maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
         httpOnly: true,
         sameSite: "lax",
-        // Only enable secure cookies when explicitly behind HTTPS (e.g. Render/Railway)
         secure: process.env.SECURE_COOKIES === "true",
       },
     })
