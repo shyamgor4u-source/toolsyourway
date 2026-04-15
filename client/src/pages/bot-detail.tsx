@@ -197,6 +197,7 @@ const SOCIAL_PLATFORMS = [
   { key: "linkedin", name: "LinkedIn", icon: "💼", bg: "#0A66C215" },
   { key: "instagram", name: "Instagram", icon: "📷", bg: "#E1306C15" },
   { key: "facebook", name: "Facebook", icon: "👍", bg: "#1877F215" },
+  { key: "youtube", name: "YouTube", icon: "▶️", bg: "#FF000015" },
   { key: "twitter", name: "X / Twitter", icon: "𝕏", bg: "#14171A15" },
   { key: "tiktok", name: "TikTok", icon: "🎵", bg: "#00000015" },
 ];

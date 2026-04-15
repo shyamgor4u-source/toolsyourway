@@ -27,6 +27,9 @@ function requireAdmin(req: Request, res: Response, next: NextFunction) {
 }
 
 export async function registerRoutes(server: Server, app: Express) {
+  // Trust proxy (Render/Railway/Heroku run behind a reverse proxy)
+  app.set("trust proxy", 1);
+
   // Session
   app.use(
     session({
@@ -603,7 +606,7 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
       const { platform, accountName } = req.body;
       if (!platform) return res.status(400).json({ message: "Platform is required" });
 
-      const validPlatforms = ["linkedin", "instagram", "tiktok", "facebook", "twitter"];
+      const validPlatforms = ["linkedin", "instagram", "tiktok", "facebook", "twitter", "youtube"];
       if (!validPlatforms.includes(platform)) {
         return res.status(400).json({ message: "Invalid platform" });
       }
@@ -627,6 +630,7 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
           authUrl: undefined, // Twitter OAuth 2.0 PKCE flow — more complex
         },
         instagram: { clientId: process.env.FACEBOOK_APP_ID, authUrl: undefined }, // Uses Facebook Graph API
+        youtube: { clientId: process.env.GOOGLE_CLIENT_ID, authUrl: undefined }, // Uses Google/YouTube Data API
         tiktok: { clientId: process.env.TIKTOK_CLIENT_KEY, authUrl: undefined },
       };
 
@@ -639,7 +643,7 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
 
       // MVP mode: create connection record directly (for demo/testing)
       // For LinkedIn and Facebook, return available pages so user can choose
-      const hasPages = ["linkedin", "facebook"].includes(platform);
+      const hasPages = ["linkedin", "facebook", "youtube"].includes(platform);
       const demoPages = hasPages ? JSON.stringify([
         { id: `page_1_${Date.now()}`, name: `${req.user!.name}'s ${platform === "linkedin" ? "Company" : "Business"} Page`, type: "page" },
         { id: `page_2_${Date.now()}`, name: `${platform === "linkedin" ? "My Startup" : "Brand Page"}`, type: "page" },
