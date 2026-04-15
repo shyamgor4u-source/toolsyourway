@@ -16,29 +16,37 @@ const BOTS = [
   { icon: Users, name: "HR Bot", desc: "Recruitment, onboarding, and employee support on demand." },
 ];
 
+// Founders Discount: 65% off for first 15 days (expires April 30, 2026)
+const FOUNDERS_DISCOUNT = 0.65;
+const FOUNDERS_EXPIRY = new Date("2026-04-30T23:59:59");
+const isFoundersActive = new Date() < FOUNDERS_EXPIRY;
+
 const PLANS = [
   {
     name: "Ultra",
-    price: "$49",
+    price: isFoundersActive ? "$17" : "$49",
+    originalPrice: isFoundersActive ? "$49" : null,
     period: "/mo",
     desc: "For startups getting started",
-    features: ["3 AI Bots", "10k tasks/mo", "Email support", "Basic analytics"],
+    features: ["5 AI Bots", "AI Manager chat", "AI image generation", "Email support", "10+ languages"],
     accent: false,
   },
   {
     name: "Pro",
-    price: "$99",
+    price: isFoundersActive ? "$35" : "$99",
+    originalPrice: isFoundersActive ? "$99" : null,
     period: "/mo",
-    desc: "For growing teams",
-    features: ["5 AI Bots", "50k tasks/mo", "Priority support", "Advanced analytics", "API access"],
+    desc: "For growing teams & influencers",
+    features: ["7 AI Bots", "AI Manager + scheduling", "AI image + video", "Priority support", "CRM integrations", "10+ languages"],
     accent: true,
   },
   {
     name: "Premium",
-    price: "$199",
+    price: isFoundersActive ? "$70" : "$199",
+    originalPrice: isFoundersActive ? "$199" : null,
     period: "/mo",
-    desc: "For enterprises at scale",
-    features: ["5 AI Bots", "Unlimited tasks", "Dedicated support", "Full analytics suite", "Custom integrations", "SLA guarantee"],
+    desc: "For ambitious brands & operators",
+    features: ["All 9 AI Bots", "AI Manager + custom workflows", "AI image + video generation", "Dedicated support", "Full analytics", "Invoice & billing", "Legal doc generation"],
     accent: false,
   },
 ];
@@ -175,6 +183,12 @@ export default function LandingPage() {
           <div className="text-center mb-10">
             <h2 className="text-xl sm:text-2xl font-bold text-foreground mb-2">Simple, Transparent Pricing</h2>
             <p className="text-sm text-muted-foreground">No hidden fees. Cancel anytime.</p>
+            {isFoundersActive && (
+              <div className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold" style={{ background: "linear-gradient(135deg, #1E1650, #2D2275)", color: "#E9A820" }}>
+                <Zap className="h-4 w-4" />
+                FOUNDERS DISCOUNT — 65% OFF ALL PLANS (Limited Time)
+              </div>
+            )}
           </div>
           <div className="grid sm:grid-cols-3 gap-4 max-w-4xl mx-auto">
             {PLANS.map((plan) => (
@@ -196,8 +210,14 @@ export default function LandingPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="mb-4">
-                    <span className="text-3xl font-bold text-foreground">{plan.price}</span>
+                    {plan.originalPrice && (
+                      <span className="text-lg text-muted-foreground line-through mr-2">{plan.originalPrice}</span>
+                    )}
+                    <span className="text-3xl font-bold" style={{ color: isFoundersActive ? "#0D9E98" : undefined }}>{plan.price}</span>
                     <span className="text-sm text-muted-foreground">{plan.period}</span>
+                    {plan.originalPrice && (
+                      <span className="ml-2 text-xs font-bold px-2 py-0.5 rounded-full" style={{ background: "#FEF3D7", color: "#C98A1A" }}>SAVE 65%</span>
+                    )}
                   </div>
                   <ul className="space-y-2 mb-6">
                     {plan.features.map((f) => (
