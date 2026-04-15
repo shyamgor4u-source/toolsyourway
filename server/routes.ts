@@ -127,17 +127,24 @@ export async function registerRoutes(server: Server, app: Express) {
     const subscription = await storage.getActiveSubscription(userId);
     let bots = await storage.getBotConfigs(userId);
 
-    if (bots.length === 0 && req.user!.plan && req.user!.plan !== "none") {
+    // Always seed bots for admin or paid users
+    const isAdmin = req.user!.role === "admin";
+    const hasPlan = req.user!.plan && req.user!.plan !== "none";
+    if (bots.length < 9 && (isAdmin || hasPlan)) {
       const defaultBots = ["marketing", "data", "email", "sales", "hr", "finance", "legal", "seo", "support"];
-      const maxBots = req.user!.plan === "ultra" ? 5 : req.user!.plan === "pro" ? 7 : 9;
+      const maxBots = isAdmin ? 9 : req.user!.plan === "ultra" ? 5 : req.user!.plan === "pro" ? 7 : 9;
+      const existingTypes = bots.map(b => b.botType);
       for (const botType of defaultBots.slice(0, maxBots)) {
-        await storage.upsertBotConfig({
-          userId,
-          botType,
-          status: "inactive",
-          config: JSON.stringify({}),
-          metrics: JSON.stringify({ tasks: 0, successRate: 0 }),
-        });
+        if (!existingTypes.includes(botType)) {
+          await storage.upsertBotConfig({
+            userId,
+            botType,
+            status: isAdmin ? "active" : "inactive",
+            config: JSON.stringify({}),
+            metrics: JSON.stringify({ tasks: 0, successRate: 0 }),
+            lastRunAt: isAdmin ? new Date().toISOString() : undefined,
+          });
+        }
       }
       bots = await storage.getBotConfigs(userId);
     }

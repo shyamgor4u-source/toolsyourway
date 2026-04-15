@@ -372,6 +372,23 @@ export default function BotDetailPage() {
   const [pagePickerPlatform, setPagePickerPlatform] = useState("");
   const [pagePickerPages, setPagePickerPages] = useState<Array<{id: string; name: string; type: string}>>([]);
 
+  // Popup connect flow
+  const [connectingPlatform, setConnectingPlatform] = useState<string | null>(null);
+  const [connectPopupOpen, setConnectPopupOpen] = useState(false);
+  const [connectStep, setConnectStep] = useState<"confirm" | "loading" | "pages" | "done">("confirm");
+
+  const startConnect = (platform: string) => {
+    setConnectingPlatform(platform);
+    setConnectStep("confirm");
+    setConnectPopupOpen(true);
+  };
+
+  const confirmConnect = () => {
+    if (!connectingPlatform) return;
+    setConnectStep("loading");
+    connectSocial.mutate(connectingPlatform);
+  };
+
   const connectSocial = useMutation({
     mutationFn: async (platform: string) => {
       const res = await apiRequest("POST", "/api/social/connect", { platform });
@@ -379,19 +396,29 @@ export default function BotDetailPage() {
     },
     onSuccess: (data) => {
       if (data.redirect) {
-        window.location.href = data.redirect;
+        // Real OAuth — open in popup window
+        const popup = window.open(data.redirect, "socialAuth", "width=600,height=700,left=200,top=100");
+        const timer = setInterval(() => {
+          if (popup?.closed) {
+            clearInterval(timer);
+            queryClient.invalidateQueries({ queryKey: ["/api/social/connections"] });
+            setConnectPopupOpen(false);
+          }
+        }, 500);
       } else if (data.needsPageSelection && data.pages) {
-        // Show page picker for LinkedIn/Facebook
         setPagePickerPlatform(data.connection?.platform || "");
         setPagePickerPages(data.pages);
-        setPagePickerOpen(true);
+        setConnectStep("pages");
         queryClient.invalidateQueries({ queryKey: ["/api/social/connections"] });
       } else {
         queryClient.invalidateQueries({ queryKey: ["/api/social/connections"] });
+        setConnectStep("done");
+        setTimeout(() => setConnectPopupOpen(false), 1500);
         toast({ title: `${data.connection?.platform} connected`, description: data.message });
       }
     },
     onError: (err: any) => {
+      setConnectPopupOpen(false);
       toast({ title: "Connection failed", description: err.message, variant: "destructive" });
     },
   });
@@ -1199,7 +1226,7 @@ export default function BotDetailPage() {
                                   </div>
                                 ) : (
                                   <Button variant="outline" size="sm" className="text-xs h-7"
-                                    onClick={() => connectSocial.mutate(sp.key)}
+                                    onClick={() => startConnect(sp.key)}
                                     disabled={connectSocial.isPending}
                                     data-testid={`connect-${sp.key}`}
                                   >{sp.icon} Connect</Button>
@@ -1212,8 +1239,75 @@ export default function BotDetailPage() {
                           <p className="text-[10px] text-muted-foreground">Once connected, the Marketing Bot can auto-publish posts to your accounts. For LinkedIn and Facebook, you can choose to post to a Company/Business Page or your personal profile.</p>
                         </div>
 
-                        {/* Page Picker Dialog */}
-                        {pagePickerOpen && (
+                        {/* Connect Popup */}
+                        {connectPopupOpen && connectingPlatform && (
+                          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setConnectPopupOpen(false)}>
+                            <div className="bg-background border border-border rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()} data-testid="connect-popup">
+                              {/* Popup Header */}
+                              <div className="p-5 text-center" style={{ background: SOCIAL_PLATFORMS.find(p => p.key === connectingPlatform)?.bg || "#f5f5f5" }}>
+                                <div className="text-4xl mb-2">{SOCIAL_PLATFORMS.find(p => p.key === connectingPlatform)?.icon}</div>
+                                <h3 className="text-base font-bold text-foreground">Connect {SOCIAL_PLATFORMS.find(p => p.key === connectingPlatform)?.name}</h3>
+                              </div>
+
+                              <div className="p-5">
+                                {connectStep === "confirm" && (
+                                  <div>
+                                    <p className="text-sm text-muted-foreground mb-4">This will allow ToolsYourWay Marketing Bot to:</p>
+                                    <ul className="space-y-2 mb-5">
+                                      <li className="flex items-center gap-2 text-sm"><CheckCircle2 className="h-4 w-4 text-green-500" /> Post content to your {SOCIAL_PLATFORMS.find(p => p.key === connectingPlatform)?.name}</li>
+                                      <li className="flex items-center gap-2 text-sm"><CheckCircle2 className="h-4 w-4 text-green-500" /> Schedule posts on your behalf</li>
+                                      <li className="flex items-center gap-2 text-sm"><CheckCircle2 className="h-4 w-4 text-green-500" /> Read engagement analytics</li>
+                                    </ul>
+                                    <Button className="w-full" onClick={confirmConnect} data-testid="confirm-connect">
+                                      Connect {SOCIAL_PLATFORMS.find(p => p.key === connectingPlatform)?.name}
+                                    </Button>
+                                    <button className="w-full text-xs text-muted-foreground mt-2 py-2" onClick={() => setConnectPopupOpen(false)}>Cancel</button>
+                                  </div>
+                                )}
+
+                                {connectStep === "loading" && (
+                                  <div className="text-center py-6">
+                                    <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-3" />
+                                    <p className="text-sm text-muted-foreground">Connecting to {SOCIAL_PLATFORMS.find(p => p.key === connectingPlatform)?.name}...</p>
+                                  </div>
+                                )}
+
+                                {connectStep === "pages" && (
+                                  <div>
+                                    <p className="text-sm font-medium text-foreground mb-1">Where should we post?</p>
+                                    <p className="text-xs text-muted-foreground mb-4">Select a Page or your Personal Profile</p>
+                                    <div className="space-y-2">
+                                      {pagePickerPages.map((page) => (
+                                        <button key={page.id}
+                                          className="w-full flex items-center gap-3 p-3 rounded-xl border border-border hover:border-primary/40 hover:bg-muted/50 transition-all text-left"
+                                          onClick={() => { selectPage.mutate({ platform: connectingPlatform, pageId: page.id, pageName: page.name, accountType: page.type }); setConnectPopupOpen(false); }}
+                                          data-testid={`page-${page.id}`}
+                                        >
+                                          <span className="text-lg">{page.type === "page" ? "🏢" : "👤"}</span>
+                                          <div className="flex-1">
+                                            <div className="text-sm font-medium">{page.name}</div>
+                                            <div className="text-[10px] text-muted-foreground capitalize">{page.type}</div>
+                                          </div>
+                                          <span className="text-xs text-primary">Select</span>
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {connectStep === "done" && (
+                                  <div className="text-center py-6">
+                                    <CheckCircle2 className="h-10 w-10 text-green-500 mx-auto mb-3" />
+                                    <p className="text-sm font-semibold text-foreground">Connected successfully!</p>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Page Picker Dialog (for changing page later) */}
+                        {pagePickerOpen && !connectPopupOpen && (
                           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setPagePickerOpen(false)}>
                             <div className="bg-background border border-border rounded-2xl p-6 w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()} data-testid="page-picker-dialog">
                               <h3 className="text-base font-bold text-foreground mb-1">Where should we post?</h3>
