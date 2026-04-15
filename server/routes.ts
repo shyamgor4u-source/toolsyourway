@@ -1,11 +1,15 @@
+import express from "express";
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
 import session from "express-session";
 import createMemoryStore from "memorystore";
 import passport from "passport";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import { Resend } from "resend";
 import OpenAI from "openai";
+import Stripe from "stripe";
+import Razorpay from "razorpay";
 import { storage, dbReady } from "./storage";
 import { registerSchema, loginSchema } from "@shared/schema";
 import { setupAuth } from "./auth";
@@ -654,6 +658,244 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
       res.json(await storage.getMedia(req.user!.id));
     } catch (err: any) {
       res.status(500).json({ message: "Failed to fetch media" });
+    }
+  });
+
+  // ============================================================
+  // PAYMENT ROUTES — Stripe (international) + Razorpay (India)
+  // ============================================================
+
+  // Plan prices in cents (USD) — founders discount active until April 30, 2026
+  const STRIPE_PRICES: Record<string, number> = {
+    ultra: 1700,   // $17/mo (regular $49)
+    pro: 3500,     // $35/mo (regular $99)
+    premium: 7000, // $70/mo (regular $199)
+  };
+
+  // Plan prices in paise (INR) — same founders discount, USD × 83
+  const RAZORPAY_PRICES: Record<string, number> = {
+    ultra: 141100,   // ₹1,411 (regular ₹4,067)
+    pro: 290500,     // ₹2,905 (regular ₹8,217)
+    premium: 581000, // ₹5,810 (regular ₹16,517)
+  };
+
+  // ----------------------------------------------------------
+  // POST /api/payments/stripe/checkout
+  // ----------------------------------------------------------
+  app.post("/api/payments/stripe/checkout", requireAuth, async (req: Request, res: Response) => {
+    try {
+      if (!process.env.STRIPE_SECRET_KEY) {
+        return res.status(503).json({
+          message: "Stripe is not configured. Add STRIPE_SECRET_KEY to your .env file to enable card payments.",
+        });
+      }
+
+      const { plan } = req.body as { plan: string };
+      if (!plan || !STRIPE_PRICES[plan]) {
+        return res.status(400).json({ message: "Invalid plan. Must be ultra, pro, or premium." });
+      }
+
+      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+      const user = req.user!;
+      const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get("host")}`;
+
+      const session = await stripe.checkout.sessions.create({
+        mode: "subscription",
+        line_items: [
+          {
+            price_data: {
+              currency: "usd",
+              product_data: { name: `ToolsYourWay ${plan.charAt(0).toUpperCase() + plan.slice(1)} Plan` },
+              unit_amount: STRIPE_PRICES[plan],
+              recurring: { interval: "month" },
+            },
+            quantity: 1,
+          },
+        ],
+        customer_email: user.email,
+        metadata: {
+          userId: String(user.id),
+          plan,
+        },
+        success_url: `${baseUrl}/#/dashboard?payment=success`,
+        cancel_url: `${baseUrl}/#/pricing`,
+      });
+
+      res.json({ url: session.url });
+    } catch (err: any) {
+      console.error("Stripe checkout error:", err);
+      res.status(500).json({ message: err.message || "Failed to create Stripe checkout session" });
+    }
+  });
+
+  // ----------------------------------------------------------
+  // GET /api/payments/stripe/success
+  // ----------------------------------------------------------
+  app.get("/api/payments/stripe/success", requireAuth, async (req: Request, res: Response) => {
+    try {
+      if (!process.env.STRIPE_SECRET_KEY) {
+        return res.redirect("/#/dashboard");
+      }
+
+      const { session_id } = req.query as { session_id: string };
+      if (!session_id) return res.redirect("/#/dashboard");
+
+      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+      const session = await stripe.checkout.sessions.retrieve(session_id);
+
+      if (session.payment_status === "paid" && session.metadata?.userId) {
+        const userId = parseInt(session.metadata.userId, 10);
+        const plan = session.metadata.plan as string;
+
+        await storage.createSubscription({
+          userId,
+          plan,
+          status: "active",
+          paymentGateway: "stripe",
+          paymentId: session.id,
+          amount: session.amount_total ?? STRIPE_PRICES[plan],
+        });
+      }
+
+      res.redirect("/#/dashboard");
+    } catch (err: any) {
+      console.error("Stripe success error:", err);
+      res.redirect("/#/dashboard");
+    }
+  });
+
+  // ----------------------------------------------------------
+  // POST /api/webhooks/stripe  (no auth — Stripe calls directly)
+  // ----------------------------------------------------------
+  app.post("/api/webhooks/stripe", express.raw({ type: "application/json" }), async (req: Request, res: Response) => {
+    try {
+      if (!process.env.STRIPE_SECRET_KEY || !process.env.STRIPE_WEBHOOK_SECRET) {
+        return res.status(200).json({ received: true });
+      }
+
+      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+      const sig = req.headers["stripe-signature"] as string;
+      let event;
+
+      try {
+        event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+      } catch (err: any) {
+        return res.status(400).json({ message: `Webhook signature verification failed: ${err.message}` });
+      }
+
+      if (event.type === "checkout.session.completed") {
+        const session = event.data.object as Stripe.Checkout.Session;
+        if (session.payment_status === "paid" && session.metadata?.userId) {
+          const userId = parseInt(session.metadata.userId, 10);
+          const plan = session.metadata.plan as string;
+
+          await storage.createSubscription({
+            userId,
+            plan,
+            status: "active",
+            paymentGateway: "stripe",
+            paymentId: session.id,
+            amount: session.amount_total ?? STRIPE_PRICES[plan],
+          });
+        }
+      }
+
+      res.json({ received: true });
+    } catch (err: any) {
+      console.error("Stripe webhook error:", err);
+      res.status(500).json({ message: "Webhook processing failed" });
+    }
+  });
+
+  // ----------------------------------------------------------
+  // POST /api/payments/razorpay/order
+  // ----------------------------------------------------------
+  app.post("/api/payments/razorpay/order", requireAuth, async (req: Request, res: Response) => {
+    try {
+      if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+        return res.status(503).json({
+          message: "Razorpay is not configured. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET to your .env file.",
+        });
+      }
+
+      const { plan } = req.body as { plan: string };
+      if (!plan || !RAZORPAY_PRICES[plan]) {
+        return res.status(400).json({ message: "Invalid plan. Must be ultra, pro, or premium." });
+      }
+
+      const razorpay = new Razorpay({
+        key_id: process.env.RAZORPAY_KEY_ID,
+        key_secret: process.env.RAZORPAY_KEY_SECRET,
+      });
+
+      const order = await razorpay.orders.create({
+        amount: RAZORPAY_PRICES[plan],
+        currency: "INR",
+        notes: {
+          userId: String(req.user!.id),
+          plan,
+        },
+      });
+
+      res.json({
+        orderId: order.id,
+        amount: order.amount,
+        currency: "INR",
+        key: process.env.RAZORPAY_KEY_ID,
+      });
+    } catch (err: any) {
+      console.error("Razorpay order error:", err);
+      res.status(500).json({ message: err.message || "Failed to create Razorpay order" });
+    }
+  });
+
+  // ----------------------------------------------------------
+  // POST /api/payments/razorpay/verify
+  // ----------------------------------------------------------
+  app.post("/api/payments/razorpay/verify", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { razorpay_order_id, razorpay_payment_id, razorpay_signature, plan } = req.body as {
+        razorpay_order_id: string;
+        razorpay_payment_id: string;
+        razorpay_signature: string;
+        plan: string;
+      };
+
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !plan) {
+        return res.status(400).json({ message: "Missing required payment verification fields" });
+      }
+
+      if (!process.env.RAZORPAY_KEY_SECRET) {
+        return res.status(503).json({ message: "Razorpay is not configured" });
+      }
+
+      // Verify HMAC signature
+      const body = `${razorpay_order_id}|${razorpay_payment_id}`;
+      const expectedSignature = crypto
+        .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+        .update(body)
+        .digest("hex");
+
+      if (expectedSignature !== razorpay_signature) {
+        return res.status(400).json({ message: "Invalid payment signature — verification failed" });
+      }
+
+      const userId = req.user!.id;
+      const amountPaise = RAZORPAY_PRICES[plan] ?? 0;
+
+      await storage.createSubscription({
+        userId,
+        plan,
+        status: "active",
+        paymentGateway: "razorpay",
+        paymentId: razorpay_payment_id,
+        amount: Math.round(amountPaise / 83), // store approximate USD cents
+      });
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error("Razorpay verify error:", err);
+      res.status(500).json({ message: err.message || "Payment verification failed" });
     }
   });
 }

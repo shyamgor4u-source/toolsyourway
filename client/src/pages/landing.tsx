@@ -227,7 +227,7 @@ export default function LandingPage() {
                       </li>
                     ))}
                   </ul>
-                  <Link href="/auth">
+                  <Link href="/pricing">
                     <Button
                       className="w-full"
                       variant={plan.accent ? "default" : "outline"}
