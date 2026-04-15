@@ -12,7 +12,9 @@ import { Link } from "wouter";
 import {
   Bot, Megaphone, Database, Mail, TrendingUp, Users,
   LogOut, Crown, Calendar, Zap, ArrowUpRight, Shield, LayoutDashboard,
-  IndianRupee, Scale, Search, Headphones,
+  IndianRupee, Scale, Search, Headphones, Presentation, Monitor,
+  Receipt, UserSearch, Target, Gavel, CalendarClock, FileText,
+  PieChart, Package, Radio, Megaphone as MegaphoneAd, UserPlus, Lock,
 } from "lucide-react";
 
 const BOT_META: Record<string, { icon: typeof Bot; label: string; color: string }> = {
@@ -26,6 +28,21 @@ const BOT_META: Record<string, { icon: typeof Bot; label: string; color: string 
   seo: { icon: Search, label: "SEO Bot", color: "#DC6B18" },
   support: { icon: Headphones, label: "Support Bot", color: "#0891B2" },
 };
+
+const COMING_SOON_BOTS = [
+  { icon: Presentation, label: "PPT & Presentation", dept: "Communications", phase: 1 },
+  { icon: Monitor, label: "IT Helpdesk", dept: "IT", phase: 1 },
+  { icon: Receipt, label: "Expense Management", dept: "Finance", phase: 2 },
+  { icon: UserSearch, label: "Recruitment", dept: "HR", phase: 2 },
+  { icon: Target, label: "Lead Generation", dept: "Sales", phase: 2 },
+  { icon: CalendarClock, label: "Meeting & Calendar", dept: "Operations", phase: 2 },
+  { icon: FileText, label: "Proposal & Quote", dept: "Sales", phase: 2 },
+  { icon: PieChart, label: "Financial Reporting", dept: "Finance", phase: 3 },
+  { icon: Package, label: "Inventory & Procurement", dept: "Operations", phase: 3 },
+  { icon: Radio, label: "PR & Brand", dept: "Marketing", phase: 3 },
+  { icon: MegaphoneAd, label: "Ad Campaign", dept: "Marketing", phase: 3 },
+  { icon: UserPlus, label: "Onboarding", dept: "HR", phase: 3 },
+];
 
 interface DashboardData {
   user: {
@@ -294,6 +311,41 @@ export default function UserDashboard() {
                         <p className="text-[10px] text-primary/60 mt-2">Click to configure →</p>
                       </CardContent>
                     </Card>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Coming Soon Bots */}
+            <div className="mt-8" data-testid="coming-soon-section">
+              <div className="flex items-center gap-3 mb-4">
+                <h2 className="font-bold text-base text-foreground">Coming Soon</h2>
+                <Badge variant="outline" className="text-[10px]">13 more bots</Badge>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                {COMING_SOON_BOTS.map((bot) => {
+                  const Icon = bot.icon;
+                  return (
+                    <div
+                      key={bot.label}
+                      className="relative border border-dashed border-border/60 rounded-xl p-4 opacity-60 hover:opacity-80 transition-opacity"
+                      data-testid={`card-coming-${bot.label.toLowerCase().replace(/\s+/g, "-")}`}
+                    >
+                      <div className="absolute top-2 right-2">
+                        <Lock className="h-3 w-3 text-muted-foreground/50" />
+                      </div>
+                      <div
+                        className="w-8 h-8 rounded-lg flex items-center justify-center mb-2"
+                        style={{ background: "rgba(30,22,80,0.05)" }}
+                      >
+                        <Icon className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                      <h3 className="font-medium text-xs text-foreground mb-0.5">{bot.label}</h3>
+                      <p className="text-[10px] text-muted-foreground">{bot.dept}</p>
+                      <Badge variant="outline" className="text-[8px] mt-2 px-1.5 py-0">
+                        Phase {bot.phase}
+                      </Badge>
+                    </div>
                   );
                 })}
               </div>
