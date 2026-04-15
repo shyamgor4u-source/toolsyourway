@@ -1,1 +1,6 @@
-node_modules/\ndist/\n*.db\n*.db-shm\n*.db-wal\n.env\n
+node_modules/
+dist/
+*.db
+*.db-shm
+*.db-wal
+.env
