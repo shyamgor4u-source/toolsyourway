@@ -200,6 +200,69 @@ export default function PricingPage() {
     razorpayMutation.mutate();
   };
 
+  const handlePaypal = async () => {
+    if (!user) { setLocation("/auth"); return; }
+    if (botCount === 0) { toast({ title: "Select at least one bot", variant: "destructive" }); return; }
+    setLoadingPlan("paypal");
+    try {
+      const res = await apiRequest("POST", "/api/payments/paypal/create", {
+        selectedBots: Array.from(selectedBots),
+        hasAiManager,
+      });
+      const data = await res.json();
+      if (data.approvalUrl) {
+        window.location.href = data.approvalUrl;
+      } else {
+        throw new Error(data.message || "No approval URL returned");
+      }
+    } catch (err: any) {
+      toast({ title: "Payment error", description: err.message || "Failed to initiate PayPal", variant: "destructive" });
+      setLoadingPlan(null);
+    }
+  };
+
+  const handleTap = async () => {
+    if (!user) { setLocation("/auth"); return; }
+    if (botCount === 0) { toast({ title: "Select at least one bot", variant: "destructive" }); return; }
+    setLoadingPlan("tap");
+    try {
+      const res = await apiRequest("POST", "/api/payments/tap/checkout", {
+        selectedBots: Array.from(selectedBots),
+        hasAiManager,
+      });
+      const data = await res.json();
+      if (data.redirectUrl) {
+        window.location.href = data.redirectUrl;
+      } else {
+        throw new Error(data.message || "No redirect URL returned");
+      }
+    } catch (err: any) {
+      toast({ title: "Payment error", description: err.message || "Failed to initiate Tap Payments", variant: "destructive" });
+      setLoadingPlan(null);
+    }
+  };
+
+  const handleXendit = async () => {
+    if (!user) { setLocation("/auth"); return; }
+    if (botCount === 0) { toast({ title: "Select at least one bot", variant: "destructive" }); return; }
+    setLoadingPlan("xendit");
+    try {
+      const res = await apiRequest("POST", "/api/payments/xendit/checkout", {
+        selectedBots: Array.from(selectedBots),
+        hasAiManager,
+      });
+      const data = await res.json();
+      if (data.redirectUrl) {
+        window.location.href = data.redirectUrl;
+      } else {
+        throw new Error(data.message || "No redirect URL returned");
+      }
+    } catch (err: any) {
+      toast({ title: "Payment error", description: err.message || "Failed to initiate Xendit", variant: "destructive" });
+      setLoadingPlan(null);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background" data-testid="pricing-page">
       {/* Nav */}
@@ -486,26 +549,51 @@ export default function PricingPage() {
           </div>
 
           {/* Payment buttons */}
-          <div className="grid sm:grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
             <Button
               onClick={handleStripe}
               disabled={loadingPlan !== null || botCount === 0}
-              className="gap-2 h-10"
+              className="h-12 text-xs font-semibold"
               data-testid="button-pay-stripe"
+              style={{ background: "#635BFF" }}
             >
-              <CreditCard className="h-4 w-4" />
-              {loadingPlan === "stripe" ? "Redirecting…" : "Pay with Card (Stripe)"}
+              {loadingPlan === "stripe" ? "Redirecting…" : "💳 Card (Stripe)"}
             </Button>
             <Button
-              variant="outline"
               onClick={handleRazorpay}
               disabled={loadingPlan !== null || botCount === 0}
-              className="gap-2 h-10"
+              className="h-12 text-xs font-semibold"
               data-testid="button-pay-razorpay"
-              style={{ borderColor: "#2D6BE4", color: "#2D6BE4" }}
+              style={{ background: "#072654" }}
             >
-              <Smartphone className="h-4 w-4" />
-              {loadingPlan === "razorpay" ? "Opening…" : "Pay with UPI (Razorpay)"}
+              {loadingPlan === "razorpay" ? "Opening…" : "🇮🇳 UPI (Razorpay)"}
+            </Button>
+            <Button
+              onClick={handlePaypal}
+              disabled={loadingPlan !== null || botCount === 0}
+              className="h-12 text-xs font-semibold"
+              data-testid="button-pay-paypal"
+              style={{ background: "#003087" }}
+            >
+              {loadingPlan === "paypal" ? "Redirecting…" : "🅿️ PayPal"}
+            </Button>
+            <Button
+              onClick={handleTap}
+              disabled={loadingPlan !== null || botCount === 0}
+              className="h-12 text-xs font-semibold"
+              data-testid="button-pay-tap"
+              style={{ background: "#2ACE80", color: "#000" }}
+            >
+              {loadingPlan === "tap" ? "Redirecting…" : "🕌 Tap (Middle East)"}
+            </Button>
+            <Button
+              onClick={handleXendit}
+              disabled={loadingPlan !== null || botCount === 0}
+              className="h-12 text-xs font-semibold"
+              data-testid="button-pay-xendit"
+              style={{ background: "#0D47A1" }}
+            >
+              {loadingPlan === "xendit" ? "Redirecting…" : "🌏 Xendit (SEA)"}
             </Button>
           </div>
         </div>

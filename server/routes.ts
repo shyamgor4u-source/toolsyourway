@@ -801,8 +801,28 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
   });
 
   // ============================================================
-  // PAYMENT ROUTES — Stripe (international) + Razorpay (India)
+  // PAYMENT ROUTES — Stripe, Razorpay, PayPal, Tap, Xendit
   // ============================================================
+
+  // Helper: calculate price with founders discount
+  function calculatePrice(selectedBots: string[], hasAiManager: boolean): number {
+    const FOUNDERS_EXPIRY = new Date("2026-04-30T23:59:59");
+    const isFounders = new Date() < FOUNDERS_EXPIRY;
+    const discount = isFounders ? 0.35 : 1; // 65% off = pay 35%
+
+    const botCount = selectedBots.length;
+    let price = 0;
+
+    if (botCount === 9 && hasAiManager) {
+      price = 59; // bundle
+    } else if (botCount === 9) {
+      price = 49; // all bots bundle
+    } else {
+      price = botCount * 7 + (hasAiManager ? 8 : 0);
+    }
+
+    return Math.round(price * discount * 100) / 100; // round to 2 decimals
+  }
 
   // Plan prices in cents (USD) — founders discount active until April 30, 2026
   const STRIPE_PRICES: Record<string, number> = {
@@ -1035,6 +1055,156 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
     } catch (err: any) {
       console.error("Razorpay verify error:", err);
       res.status(500).json({ message: err.message || "Payment verification failed" });
+    }
+  });
+
+  // ----------------------------------------------------------
+  // POST /api/payments/paypal/create
+  // ----------------------------------------------------------
+  app.post("/api/payments/paypal/create", requireAuth, async (req: Request, res: Response) => {
+    try {
+      if (!process.env.PAYPAL_CLIENT_ID || !process.env.PAYPAL_SECRET) {
+        return res.status(503).json({
+          message: "PayPal not configured. Add PAYPAL_CLIENT_ID and PAYPAL_SECRET to .env",
+        });
+      }
+
+      const { selectedBots, hasAiManager } = req.body as { selectedBots: string[]; hasAiManager: boolean };
+      if (!Array.isArray(selectedBots) || selectedBots.length === 0) {
+        return res.status(400).json({ message: "selectedBots must be a non-empty array" });
+      }
+
+      const totalPrice = calculatePrice(selectedBots, hasAiManager);
+
+      const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID;
+      const PAYPAL_SECRET = process.env.PAYPAL_SECRET;
+      const PAYPAL_BASE = process.env.PAYPAL_SANDBOX === "true"
+        ? "https://api-m.sandbox.paypal.com"
+        : "https://api-m.paypal.com";
+
+      // Get access token
+      const authRes = await fetch(`${PAYPAL_BASE}/v1/oauth2/token`, {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_SECRET}`).toString("base64")}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: "grant_type=client_credentials",
+      });
+      const { access_token } = await authRes.json() as { access_token: string };
+
+      // Create order
+      const orderRes = await fetch(`${PAYPAL_BASE}/v2/checkout/orders`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${access_token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          intent: "CAPTURE",
+          purchase_units: [{
+            amount: { currency_code: "USD", value: totalPrice.toFixed(2) },
+            description: `ToolsYourWay - ${selectedBots.length} bots`,
+          }],
+          application_context: {
+            return_url: `${process.env.BASE_URL || "http://localhost:5000"}/#/dashboard?payment=success`,
+            cancel_url: `${process.env.BASE_URL || "http://localhost:5000"}/#/pricing`,
+          },
+        }),
+      });
+      const order = await orderRes.json() as { id: string; links: { rel: string; href: string }[] };
+      const approvalLink = order.links?.find((l: any) => l.rel === "approve")?.href;
+
+      res.json({ orderId: order.id, approvalUrl: approvalLink });
+    } catch (err: any) {
+      console.error("PayPal create error:", err);
+      res.status(500).json({ message: err.message || "Failed to create PayPal order" });
+    }
+  });
+
+  // ----------------------------------------------------------
+  // POST /api/payments/tap/checkout  (Tap Payments — Middle East)
+  // ----------------------------------------------------------
+  app.post("/api/payments/tap/checkout", requireAuth, async (req: Request, res: Response) => {
+    try {
+      if (!process.env.TAP_SECRET_KEY) {
+        return res.status(503).json({
+          message: "Tap Payments not configured. Add TAP_SECRET_KEY to .env. Get your key at https://tap.company",
+        });
+      }
+
+      const { selectedBots, hasAiManager } = req.body as { selectedBots: string[]; hasAiManager: boolean };
+      if (!Array.isArray(selectedBots) || selectedBots.length === 0) {
+        return res.status(400).json({ message: "selectedBots must be a non-empty array" });
+      }
+
+      const totalPrice = calculatePrice(selectedBots, hasAiManager);
+      const TAP_SECRET = process.env.TAP_SECRET_KEY;
+
+      const chargeRes = await fetch("https://api.tap.company/v2/charges", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${TAP_SECRET}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount: totalPrice,
+          currency: "USD",
+          customer: { first_name: req.user!.name, email: req.user!.email },
+          source: { id: "src_all" },
+          redirect: { url: `${process.env.BASE_URL || "http://localhost:5000"}/api/payments/tap/callback?userId=${req.user!.id}&bots=${selectedBots.join(",")}` },
+          description: `ToolsYourWay - ${selectedBots.length} bots`,
+          metadata: {
+            userId: req.user!.id,
+            bots: selectedBots.join(","),
+            aiManager: hasAiManager ? "1" : "0",
+          },
+        }),
+      });
+      const charge = await chargeRes.json() as { transaction?: { url?: string }; redirect?: { url?: string } };
+
+      res.json({ redirectUrl: charge.transaction?.url || charge.redirect?.url });
+    } catch (err: any) {
+      console.error("Tap checkout error:", err);
+      res.status(500).json({ message: err.message || "Failed to create Tap charge" });
+    }
+  });
+
+  // ----------------------------------------------------------
+  // POST /api/payments/xendit/checkout  (Xendit — Southeast Asia)
+  // ----------------------------------------------------------
+  app.post("/api/payments/xendit/checkout", requireAuth, async (req: Request, res: Response) => {
+    try {
+      if (!process.env.XENDIT_SECRET_KEY) {
+        return res.status(503).json({
+          message: "Xendit not configured. Add XENDIT_SECRET_KEY to .env. Get your key at https://dashboard.xendit.co/settings/developers",
+        });
+      }
+
+      const { selectedBots, hasAiManager } = req.body as { selectedBots: string[]; hasAiManager: boolean };
+      if (!Array.isArray(selectedBots) || selectedBots.length === 0) {
+        return res.status(400).json({ message: "selectedBots must be a non-empty array" });
+      }
+
+      const totalPrice = calculatePrice(selectedBots, hasAiManager);
+      const XENDIT_SECRET = process.env.XENDIT_SECRET_KEY;
+
+      const invoiceRes = await fetch("https://api.xendit.co/v2/invoices", {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${XENDIT_SECRET}:`).toString("base64")}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          external_id: `tw_${req.user!.id}_${Date.now()}`,
+          amount: totalPrice,
+          currency: "USD",
+          description: `ToolsYourWay - ${selectedBots.length} bots`,
+          customer: { given_names: req.user!.name, email: req.user!.email },
+          success_redirect_url: `${process.env.BASE_URL || "http://localhost:5000"}/#/dashboard?payment=success`,
+          failure_redirect_url: `${process.env.BASE_URL || "http://localhost:5000"}/#/pricing`,
+        }),
+      });
+      const invoice = await invoiceRes.json() as { invoice_url?: string };
+
+      res.json({ redirectUrl: invoice.invoice_url });
+    } catch (err: any) {
+      console.error("Xendit checkout error:", err);
+      res.status(500).json({ message: err.message || "Failed to create Xendit invoice" });
     }
   });
 }
