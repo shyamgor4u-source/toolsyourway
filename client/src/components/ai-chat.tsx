@@ -1,10 +1,29 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { MessageCircle, X, Send, Bot, Sparkles, Minimize2 } from "lucide-react";
+import { MessageCircle, X, Send, Bot, Sparkles, Minimize2, Mic } from "lucide-react";
+
+const LANGUAGES = [
+  { code: "en-IN", label: "English" },
+  { code: "hi-IN", label: "Hindi" },
+  { code: "gu-IN", label: "Gujarati" },
+  { code: "ta-IN", label: "Tamil" },
+  { code: "te-IN", label: "Telugu" },
+  { code: "bn-IN", label: "Bengali" },
+  { code: "mr-IN", label: "Marathi" },
+  { code: "kn-IN", label: "Kannada" },
+  { code: "ml-IN", label: "Malayalam" },
+  { code: "ar-SA", label: "Arabic" },
+  { code: "zh-CN", label: "Chinese" },
+];
+
+const SpeechRecognitionAPI =
+  typeof window !== "undefined"
+    ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    : null;
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -18,6 +37,39 @@ export default function AiChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [selectedLang, setSelectedLang] = useState("en-IN");
+  const recognitionRef = useRef<any>(null);
+  const hasSpeechAPI = Boolean(SpeechRecognitionAPI);
+
+  const startRecording = useCallback(() => {
+    if (!SpeechRecognitionAPI || isRecording) return;
+    const recognition = new SpeechRecognitionAPI();
+    recognition.lang = selectedLang;
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.onstart = () => setIsRecording(true);
+    recognition.onresult = (event: any) => {
+      const transcript = event.results[0][0].transcript;
+      setInput(transcript);
+    };
+    recognition.onend = () => {
+      setIsRecording(false);
+      recognitionRef.current = null;
+    };
+    recognition.onerror = () => {
+      setIsRecording(false);
+      recognitionRef.current = null;
+    };
+    recognitionRef.current = recognition;
+    recognition.start();
+  }, [isRecording, selectedLang]);
+
+  const stopRecording = useCallback(() => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -223,6 +275,34 @@ export default function AiChat() {
               disabled={sendMessage.isPending}
               data-testid="chat-input"
             />
+            {hasSpeechAPI && (
+              <>
+                <select
+                  value={selectedLang}
+                  onChange={(e) => setSelectedLang(e.target.value)}
+                  className="text-[11px] border border-border/50 rounded-lg px-1.5 py-1 bg-background text-muted-foreground h-9 cursor-pointer max-w-[70px]"
+                  data-testid="lang-selector"
+                  title="Speech language"
+                >
+                  {LANGUAGES.map((l) => (
+                    <option key={l.code} value={l.code}>{l.label}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={isRecording ? stopRecording : startRecording}
+                  disabled={sendMessage.isPending}
+                  data-testid="mic-button"
+                  title={isRecording ? "Stop recording" : "Start voice input"}
+                  className={`flex-shrink-0 w-9 h-9 rounded-xl flex items-center justify-center transition-all ${
+                    isRecording
+                      ? "bg-red-500 text-white animate-pulse"
+                      : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  }`}
+                >
+                  <Mic className="h-4 w-4" />
+                </button>
+              </>
+            )}
             <Button
               size="sm"
               onClick={handleSend}

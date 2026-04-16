@@ -76,6 +76,7 @@ export async function registerRoutes(server: Server, app: Express) {
         authProvider: "email",
         role: "user",
         plan: "none",
+        userType: req.body.userType || "business",
       });
 
       const { password: _, authProviderId, ...safeUser } = user;

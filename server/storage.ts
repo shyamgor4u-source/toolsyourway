@@ -28,6 +28,9 @@ async function initDb() {
       auth_provider_id TEXT,
       role TEXT NOT NULL DEFAULT 'user',
       plan TEXT DEFAULT 'none',
+      user_type TEXT DEFAULT 'business',
+      selected_bots TEXT,
+      has_ai_manager INTEGER DEFAULT 0,
       avatar_url TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -306,7 +309,10 @@ export class DatabaseStorage implements IStorage {
         password: hashedPassword,
         authProvider: "email",
         role: "admin",
-        plan: "premium",
+        plan: "bundle",
+        userType: "business",
+        selectedBots: JSON.stringify(["marketing","data","email","sales","hr","finance","legal","seo","support"]),
+        hasAiManager: 1,
       });
       // Create a free Premium subscription
       await db.insert(subscriptions).values({

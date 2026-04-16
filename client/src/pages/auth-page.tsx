@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { Bot, Chrome, Mail } from "lucide-react";
+import { Bot, Chrome, Mail, Building, Sparkles } from "lucide-react";
 
 export default function AuthPage() {
   const { user, isLoading: authLoading, login, register } = useAuth();
@@ -23,6 +23,7 @@ export default function AuthPage() {
   const [regEmail, setRegEmail] = useState("");
   const [regPassword, setRegPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [userType, setUserType] = useState<"business" | "influencer">("business");
 
   // Check available OAuth providers
   const { data: providers } = useQuery<{ google: boolean; microsoft: boolean }>({
@@ -65,8 +66,10 @@ export default function AuthPage() {
     e.preventDefault();
     setSubmitting(true);
     try {
-      await register(regEmail, regName, regPassword);
+      await register(regEmail, regName, regPassword, userType);
       toast({ title: "Account created!" });
+      setLocation(`/pricing?type=${userType}`);
+      return;
     } catch (err: any) {
       const msg = err.message?.includes(":") ? err.message.split(":").slice(1).join(":").trim() : err.message;
       let errorText = "Registration failed";
@@ -149,6 +152,31 @@ export default function AuthPage() {
 
                 <TabsContent value="register">
                   <form onSubmit={handleRegister} className="space-y-4">
+                    {/* User type selector */}
+                    <div className="space-y-2" data-testid="reg-user-type">
+                      <Label>I am a…</Label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {[
+                          { type: "business" as const, label: "Business / Startup", icon: Building },
+                          { type: "influencer" as const, label: "Influencer / Creator", icon: Sparkles },
+                        ].map(({ type, label, icon: Icon }) => (
+                          <button
+                            key={type}
+                            type="button"
+                            onClick={() => setUserType(type)}
+                            data-testid={`reg-type-${type}`}
+                            className={`flex items-center gap-2 p-2.5 rounded-lg border-2 text-left text-xs transition-all ${
+                              userType === type
+                                ? "border-primary bg-primary/5 font-semibold"
+                                : "border-border/50 hover:border-border text-muted-foreground"
+                            }`}
+                          >
+                            <Icon className="h-4 w-4 flex-shrink-0" />
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                     <div className="space-y-2">
                       <Label htmlFor="reg-name">Name</Label>
                       <Input

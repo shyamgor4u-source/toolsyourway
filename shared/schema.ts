@@ -9,11 +9,14 @@ export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   email: text("email").notNull().unique(),
   name: text("name").notNull(),
-  password: text("password"), // null for OAuth-only users
-  authProvider: text("auth_provider").notNull().default("email"), // email | google | microsoft
-  authProviderId: text("auth_provider_id"), // OAuth subject ID
+  password: text("password"),
+  authProvider: text("auth_provider").notNull().default("email"),
+  authProviderId: text("auth_provider_id"),
   role: text("role").notNull().default("user"), // user | admin
-  plan: text("plan").default("none"), // none | ultra | pro | premium
+  plan: text("plan").default("none"), // none | individual | bundle | custom
+  userType: text("user_type").default("business"), // business | influencer
+  selectedBots: text("selected_bots"), // JSON array of bot keys user purchased
+  hasAiManager: integer("has_ai_manager").default(0), // 0 or 1
   avatarUrl: text("avatar_url"),
   createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
 });

@@ -16,37 +16,35 @@ const BOTS = [
   { icon: Users, name: "HR Bot", desc: "Recruitment, onboarding, and employee support on demand." },
 ];
 
-// Founders Discount: 65% off for first 15 days (expires April 30, 2026)
-const FOUNDERS_DISCOUNT = 0.65;
 const FOUNDERS_EXPIRY = new Date("2026-04-30T23:59:59");
 const isFoundersActive = new Date() < FOUNDERS_EXPIRY;
 
-const PLANS = [
+const PRICING_OPTIONS = [
   {
-    name: "Ultra",
-    price: isFoundersActive ? "$17" : "$49",
-    originalPrice: isFoundersActive ? "$49" : null,
-    period: "/mo",
-    desc: "For startups getting started",
-    features: ["5 AI Bots", "AI Manager chat", "AI image generation", "Email support", "10+ languages"],
+    name: "Per Bot",
+    price: isFoundersActive ? "$2" : "$7",
+    originalPrice: isFoundersActive ? "$7" : null,
+    period: "/bot/mo",
+    desc: "Pick exactly the bots you need",
+    features: ["Choose any bot", "Pay per bot", "Add/remove anytime", "10+ languages", "Self-service"],
     accent: false,
   },
   {
-    name: "Pro",
-    price: isFoundersActive ? "$35" : "$99",
-    originalPrice: isFoundersActive ? "$99" : null,
-    period: "/mo",
-    desc: "For growing teams & influencers",
-    features: ["7 AI Bots", "AI Manager + scheduling", "AI image + video", "Priority support", "CRM integrations", "10+ languages"],
+    name: "Bot + AI Manager",
+    price: isFoundersActive ? "$5" : "$15",
+    originalPrice: isFoundersActive ? "$15" : null,
+    period: "/bot/mo",
+    desc: "Bot + your personal AI CEO",
+    features: ["Everything in Per Bot", "Virtual AI Manager", "Voice commands (regional)", "Strategy guidance", "Priority support"],
     accent: true,
   },
   {
-    name: "Premium",
-    price: isFoundersActive ? "$70" : "$199",
-    originalPrice: isFoundersActive ? "$199" : null,
+    name: "All 9 + AI Manager",
+    price: isFoundersActive ? "$21" : "$59",
+    originalPrice: isFoundersActive ? "$59" : null,
     period: "/mo",
-    desc: "For ambitious brands & operators",
-    features: ["All 9 AI Bots", "AI Manager + custom workflows", "AI image + video generation", "Dedicated support", "Full analytics", "Invoice & billing", "Legal doc generation"],
+    desc: "Full platform, maximum power",
+    features: ["All 9 AI Bots", "Virtual AI Manager", "AI image + video", "Voice in 10+ languages", "Custom workflows", "Dedicated support"],
     accent: false,
   },
 ];
@@ -181,17 +179,17 @@ export default function LandingPage() {
       <section id="pricing" className="py-20 px-4 sm:px-6">
         <div className="max-w-5xl mx-auto">
           <div className="text-center mb-10">
-            <h2 className="text-xl sm:text-2xl font-bold text-foreground mb-2">Simple, Transparent Pricing</h2>
-            <p className="text-sm text-muted-foreground">No hidden fees. Cancel anytime.</p>
+            <h2 className="text-xl sm:text-2xl font-bold text-foreground mb-2">Pay Only for What You Use</h2>
+            <p className="text-sm text-muted-foreground">Pick your bots. Add AI Manager. No hidden fees.</p>
             {isFoundersActive && (
               <div className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold" style={{ background: "linear-gradient(135deg, #1E1650, #2D2275)", color: "#E9A820" }}>
                 <Zap className="h-4 w-4" />
-                FOUNDERS DISCOUNT — 65% OFF ALL PLANS (Limited Time)
+                FOUNDERS DISCOUNT — 65% OFF (Limited Time)
               </div>
             )}
           </div>
           <div className="grid sm:grid-cols-3 gap-4 max-w-4xl mx-auto">
-            {PLANS.map((plan) => (
+            {PRICING_OPTIONS.map((plan) => (
               <Card
                 key={plan.name}
                 className={`relative border ${plan.accent ? "border-primary shadow-lg" : "border-border/50"}`}
