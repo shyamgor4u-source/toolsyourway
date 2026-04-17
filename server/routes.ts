@@ -10,6 +10,7 @@ import { Resend } from "resend";
 import OpenAI from "openai";
 import Stripe from "stripe";
 import Razorpay from "razorpay";
+import Replicate from "replicate";
 import { storage, dbReady } from "./storage";
 import { registerSchema, loginSchema } from "@shared/schema";
 import { setupAuth } from "./auth";
@@ -1205,6 +1206,193 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
     } catch (err: any) {
       console.error("Xendit checkout error:", err);
       res.status(500).json({ message: err.message || "Failed to create Xendit invoice" });
+    }
+  });
+
+  // ============================================================
+  // MEDIA — REAL VIDEO GENERATION (Replicate)
+  // ============================================================
+
+  // POST /api/media/generate-video-real
+  // Creates a Replicate prediction for video generation and returns immediately
+  app.post("/api/media/generate-video-real", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { prompt, model = "minimax", style } = req.body as {
+        prompt: string;
+        model: "minimax" | "kling";
+        style?: string;
+      };
+
+      if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
+        return res.status(400).json({ message: "prompt is required" });
+      }
+
+      const REPLICATE_TOKEN = process.env.REPLICATE_API_TOKEN;
+      if (!REPLICATE_TOKEN) {
+        return res.json({
+          message: "Add REPLICATE_API_TOKEN to .env to enable real video generation. Get your token at https://replicate.com/account/api-tokens",
+          demo: true,
+        });
+      }
+
+      const stylePrefix = style ? `${style} style. ` : "";
+      const fullPrompt = `${stylePrefix}${prompt.trim()}`;
+
+      // Choose model
+      const replicateModel =
+        model === "kling"
+          ? "kuaishou/kling-v1-6-standard"
+          : "minimax/video-01-live";
+
+      const replicateInput: Record<string, unknown> =
+        model === "kling"
+          ? { prompt: fullPrompt, duration: "5", aspect_ratio: "16:9" }
+          : { prompt: fullPrompt };
+
+      // Create prediction (async — returns immediately)
+      const predictionRes = await fetch("https://api.replicate.com/v1/models/" + replicateModel + "/predictions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${REPLICATE_TOKEN}`,
+          "Content-Type": "application/json",
+          Prefer: "respond-async",
+        },
+        body: JSON.stringify({ input: replicateInput }),
+      });
+
+      if (!predictionRes.ok) {
+        // Fallback: try versioned prediction endpoint
+        const fallbackRes = await fetch("https://api.replicate.com/v1/predictions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${REPLICATE_TOKEN}`,
+            "Content-Type": "application/json",
+            Prefer: "respond-async",
+          },
+          body: JSON.stringify({
+            model: replicateModel,
+            input: replicateInput,
+          }),
+        });
+
+        if (!fallbackRes.ok) {
+          const errBody = await fallbackRes.text();
+          return res.status(502).json({
+            message: `Replicate API error (model: ${replicateModel}): ${errBody}`,
+            model: replicateModel,
+          });
+        }
+
+        const prediction = await fallbackRes.json() as { id: string; status: string };
+        return res.json({ predictionId: prediction.id, status: "processing", model: replicateModel, prompt: fullPrompt });
+      }
+
+      const prediction = await predictionRes.json() as { id: string; status: string };
+      return res.json({ predictionId: prediction.id, status: "processing", model: replicateModel, prompt: fullPrompt });
+    } catch (err: any) {
+      console.error("Video generation error:", err);
+      res.status(500).json({ message: err.message || "Video generation failed" });
+    }
+  });
+
+  // GET /api/media/video-status/:predictionId
+  // Polls Replicate for the prediction result
+  app.get("/api/media/video-status/:predictionId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { predictionId } = req.params;
+
+      const REPLICATE_TOKEN = process.env.REPLICATE_API_TOKEN;
+      if (!REPLICATE_TOKEN) {
+        return res.status(503).json({ message: "REPLICATE_API_TOKEN not configured" });
+      }
+
+      const pollRes = await fetch(`https://api.replicate.com/v1/predictions/${predictionId}`, {
+        headers: { Authorization: `Bearer ${REPLICATE_TOKEN}` },
+      });
+
+      if (!pollRes.ok) {
+        const errBody = await pollRes.text();
+        return res.status(502).json({ message: `Replicate poll error: ${errBody}` });
+      }
+
+      const result = await pollRes.json() as {
+        id: string;
+        status: "starting" | "processing" | "succeeded" | "failed" | "canceled";
+        output?: string | string[];
+        error?: string;
+        logs?: string;
+      };
+
+      if (result.status === "succeeded") {
+        const videoUrl = Array.isArray(result.output) ? result.output[0] : result.output;
+
+        // Save to media gallery if storage supports it
+        try {
+          await storage.createMedia({
+            userId: req.user!.id,
+            type: "video",
+            url: videoUrl as string,
+            prompt: predictionId,
+            status: "completed",
+          });
+        } catch (_) {
+          // Non-fatal — media save is best-effort
+        }
+
+        return res.json({ status: "succeeded", videoUrl });
+      }
+
+      if (result.status === "failed" || result.status === "canceled") {
+        return res.json({ status: result.status, error: result.error || "Generation failed" });
+      }
+
+      // Still running
+      return res.json({ status: "processing" });
+    } catch (err: any) {
+      console.error("Video status poll error:", err);
+      res.status(500).json({ message: err.message || "Failed to poll video status" });
+    }
+  });
+
+  // POST /api/media/text-to-speech
+  // Converts text to audio using OpenAI TTS
+  app.post("/api/media/text-to-speech", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { text, language } = req.body as { text: string; language?: string };
+
+      if (!text || typeof text !== "string" || !text.trim()) {
+        return res.status(400).json({ message: "text is required" });
+      }
+
+      if (text.length > 4096) {
+        return res.status(400).json({ message: "Text must be 4096 characters or less" });
+      }
+
+      if (!process.env.OPENAI_API_KEY) {
+        return res.json({
+          message: "Add OPENAI_API_KEY to .env to enable text-to-speech. Get your key at https://platform.openai.com/api-keys",
+          demo: true,
+        });
+      }
+
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+      const response = await openai.audio.speech.create({
+        model: "tts-1",
+        voice: "nova",
+        input: text.trim(),
+      });
+
+      const buffer = Buffer.from(await response.arrayBuffer());
+      const audioBase64 = buffer.toString("base64");
+
+      return res.json({
+        audioUrl: `data:audio/mp3;base64,${audioBase64}`,
+        text: text.trim(),
+      });
+    } catch (err: any) {
+      console.error("TTS error:", err);
+      res.status(500).json({ message: err.message || "Text-to-speech failed" });
     }
   });
 }

@@ -19,7 +19,7 @@ import {
   ArrowLeft, Settings, Activity, BarChart3, Clock, CheckCircle2,
   AlertCircle, Globe, Calendar, Zap, Play, Pause,
   IndianRupee, Scale, Search, Headphones, Plus, Trash2, Loader2,
-  ImageIcon, Film, Sparkles,
+  ImageIcon, Film, Sparkles, Mic, Download, Radio,
 } from "lucide-react";
 
 const BOT_META: Record<string, {
@@ -319,6 +319,20 @@ export default function BotDetailPage() {
   const [vidStyle, setVidStyle] = useState("cinematic");
   const [videoFrames, setVideoFrames] = useState<string[]>([]);
 
+  // Real video generation state
+  const [vidModel, setVidModel] = useState<"minimax" | "kling">("minimax");
+  const [vidGenerating, setVidGenerating] = useState(false);
+  const [vidPredictionId, setVidPredictionId] = useState<string | null>(null);
+  const [vidResult, setVidResult] = useState<string | null>(null);
+  const [vidDemoMsg, setVidDemoMsg] = useState<string | null>(null);
+  const [vidError, setVidError] = useState<string | null>(null);
+
+  // TTS state
+  const [ttsText, setTtsText] = useState("");
+  const [ttsAudio, setTtsAudio] = useState<string | null>(null);
+  const [ttsGenerating, setTtsGenerating] = useState(false);
+  const [ttsDemoMsg, setTtsDemoMsg] = useState<string | null>(null);
+
   const genImage = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/media/generate-image", { prompt: imgPrompt, style: imgStyle });
@@ -349,6 +363,85 @@ export default function BotDetailPage() {
       toast({ title: "Video generation failed", description: err.message, variant: "destructive" });
     },
   });
+
+  // Real video generation: start prediction then poll
+  const handleGenerateVideoReal = async () => {
+    if (!vidPrompt.trim()) return;
+    setVidGenerating(true);
+    setVidResult(null);
+    setVidDemoMsg(null);
+    setVidError(null);
+    setVidPredictionId(null);
+    try {
+      const res = await apiRequest("POST", "/api/media/generate-video-real", {
+        prompt: vidPrompt,
+        model: vidModel,
+        style: vidStyle,
+      });
+      const data = await res.json();
+      if (data.demo) {
+        setVidDemoMsg(data.message);
+        setVidGenerating(false);
+        return;
+      }
+      if (!data.predictionId) {
+        setVidError(data.message || "Failed to start video generation");
+        setVidGenerating(false);
+        return;
+      }
+      setVidPredictionId(data.predictionId);
+      // Poll for result every 5 seconds
+      const intervalId = setInterval(async () => {
+        try {
+          const pollRes = await apiRequest("GET", `/api/media/video-status/${data.predictionId}`);
+          const pollData = await pollRes.json();
+          if (pollData.status === "succeeded" && pollData.videoUrl) {
+            clearInterval(intervalId);
+            setVidResult(pollData.videoUrl);
+            setVidGenerating(false);
+            setVidPredictionId(null);
+            queryClient.invalidateQueries({ queryKey: ["/api/media/gallery"] });
+            toast({ title: "Video ready!", description: "Your video has been generated." });
+          } else if (pollData.status === "failed" || pollData.status === "canceled") {
+            clearInterval(intervalId);
+            setVidError(pollData.error || "Video generation failed");
+            setVidGenerating(false);
+            setVidPredictionId(null);
+          }
+        } catch (pollErr: any) {
+          clearInterval(intervalId);
+          setVidError(pollErr.message || "Polling failed");
+          setVidGenerating(false);
+          setVidPredictionId(null);
+        }
+      }, 5000);
+    } catch (err: any) {
+      setVidError(err.message || "Video generation failed");
+      setVidGenerating(false);
+    }
+  };
+
+  // Text-to-speech handler
+  const handleGenerateTts = async () => {
+    if (!ttsText.trim()) return;
+    setTtsGenerating(true);
+    setTtsAudio(null);
+    setTtsDemoMsg(null);
+    try {
+      const res = await apiRequest("POST", "/api/media/text-to-speech", { text: ttsText });
+      const data = await res.json();
+      if (data.demo) {
+        setTtsDemoMsg(data.message);
+      } else if (data.audioUrl) {
+        setTtsAudio(data.audioUrl);
+        toast({ title: "Voiceover ready!", description: "Your audio has been generated." });
+      }
+    } catch (err: any) {
+      toast({ title: "TTS failed", description: err.message, variant: "destructive" });
+    } finally {
+      setTtsGenerating(false);
+    }
+  };
 
   const { data: mediaGallery } = useQuery<any[]>({
     queryKey: ["/api/media/gallery"],
@@ -753,38 +846,106 @@ export default function BotDetailPage() {
                               )}
                             </div>
 
-                            {/* Video Storyboard */}
+                            {/* Real Video Generation */}
                             <div className="space-y-3 p-4 rounded-lg border border-border bg-muted/20">
-                              <h4 className="text-sm font-semibold flex items-center gap-2"><Film className="h-3.5 w-3.5" /> Generate Video Storyboard</h4>
-                              <Input
+                              <div className="flex items-center justify-between">
+                                <h4 className="text-sm font-semibold flex items-center gap-2"><Film className="h-3.5 w-3.5" /> Generate Video</h4>
+                                <span className="text-[10px] text-muted-foreground bg-muted px-2 py-0.5 rounded-full">2 videos/month included</span>
+                              </div>
+
+                              {/* Model selector */}
+                              <div className="grid grid-cols-2 gap-2">
+                                <button
+                                  type="button"
+                                  data-testid="radio-model-minimax"
+                                  onClick={() => setVidModel("minimax")}
+                                  className={`relative text-left p-2.5 rounded-md border text-xs transition-colors ${
+                                    vidModel === "minimax"
+                                      ? "border-primary bg-primary/5"
+                                      : "border-border bg-background hover:bg-muted/50"
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-1.5 mb-0.5">
+                                    <Radio className="h-3 w-3" />
+                                    <span className="font-semibold">MiniMax Hailuo</span>
+                                    <Badge className="text-[9px] px-1 py-0 h-3.5 ml-auto" variant="secondary">Recommended</Badge>
+                                  </div>
+                                  <p className="text-[10px] text-muted-foreground">Fast ~60s · Great for social</p>
+                                </button>
+                                <button
+                                  type="button"
+                                  data-testid="radio-model-kling"
+                                  onClick={() => setVidModel("kling")}
+                                  className={`text-left p-2.5 rounded-md border text-xs transition-colors ${
+                                    vidModel === "kling"
+                                      ? "border-primary bg-primary/5"
+                                      : "border-border bg-background hover:bg-muted/50"
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-1.5 mb-0.5">
+                                    <Radio className="h-3 w-3" />
+                                    <span className="font-semibold">Kling Pro</span>
+                                  </div>
+                                  <p className="text-[10px] text-muted-foreground">Slower ~5min · Talking heads</p>
+                                </button>
+                              </div>
+
+                              <Textarea
                                 placeholder="Describe your video concept..."
                                 value={vidPrompt}
                                 onChange={(e) => setVidPrompt(e.target.value)}
                                 data-testid="input-video-prompt"
+                                className="resize-none text-sm"
+                                rows={2}
                               />
+
                               <Select value={vidStyle} onValueChange={setVidStyle}>
-                                <SelectTrigger><SelectValue /></SelectTrigger>
+                                <SelectTrigger data-testid="select-video-style"><SelectValue /></SelectTrigger>
                                 <SelectContent>
                                   <SelectItem value="cinematic">Cinematic</SelectItem>
+                                  <SelectItem value="social">Social Media</SelectItem>
                                   <SelectItem value="corporate">Corporate</SelectItem>
-                                  <SelectItem value="energetic">Energetic / Reels</SelectItem>
-                                  <SelectItem value="minimal">Minimal / Clean</SelectItem>
+                                  <SelectItem value="energetic">Energetic</SelectItem>
                                 </SelectContent>
                               </Select>
+
                               <Button
                                 className="w-full" size="sm"
-                                onClick={() => genVideo.mutate()}
-                                disabled={!vidPrompt.trim() || genVideo.isPending}
+                                onClick={handleGenerateVideoReal}
+                                disabled={!vidPrompt.trim() || vidGenerating}
                                 data-testid="button-generate-video"
                               >
-                                {genVideo.isPending ? <><Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" /> Generating 3 frames...</> : <><Film className="h-3.5 w-3.5 mr-2" /> Generate Storyboard</>}
+                                {vidGenerating
+                                  ? <><Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" /> Generating… 1–5 min</>
+                                  : <><Film className="h-3.5 w-3.5 mr-2" /> Generate Video</>}
                               </Button>
-                              {videoFrames.length > 0 && (
-                                <div className="mt-2 space-y-2">
-                                  <p className="text-xs text-muted-foreground">3-frame storyboard:</p>
-                                  <div className="grid grid-cols-3 gap-1 rounded-lg overflow-hidden border border-border">
-                                    {videoFrames.map((f, i) => <img key={i} src={f} alt={`Frame ${i+1}`} className="w-full h-auto" />)}
-                                  </div>
+
+                              {vidGenerating && (
+                                <p className="text-xs text-muted-foreground text-center animate-pulse">
+                                  Generating… this may take 1–5 minutes
+                                </p>
+                              )}
+
+                              {vidDemoMsg && (
+                                <div className="rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 p-2.5">
+                                  <p className="text-xs text-amber-700 dark:text-amber-300">{vidDemoMsg}</p>
+                                </div>
+                              )}
+
+                              {vidError && (
+                                <div className="rounded-md bg-destructive/10 border border-destructive/20 p-2.5">
+                                  <p className="text-xs text-destructive">{vidError}</p>
+                                </div>
+                              )}
+
+                              {vidResult && (
+                                <div className="mt-2 rounded-lg overflow-hidden border border-border">
+                                  <video
+                                    src={vidResult}
+                                    controls
+                                    className="w-full h-auto"
+                                    data-testid="video-result"
+                                  />
                                 </div>
                               )}
                             </div>
@@ -805,6 +966,63 @@ export default function BotDetailPage() {
                                   </div>
                                 ))}
                               </div>
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
+
+                      {/* AI Voiceover / Text-to-Speech */}
+                      <Card>
+                        <CardHeader className="pb-3">
+                          <CardTitle className="text-base flex items-center gap-2">
+                            <Mic className="h-4 w-4" /> AI Voiceover
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          <Textarea
+                            placeholder="Type or paste the text for your voiceover..."
+                            value={ttsText}
+                            onChange={(e) => setTtsText(e.target.value)}
+                            rows={4}
+                            className="resize-none text-sm"
+                            data-testid="input-tts-text"
+                          />
+                          <p className="text-xs text-muted-foreground">Supports English and 10+ languages</p>
+                          <Button
+                            className="w-full"
+                            size="sm"
+                            onClick={handleGenerateTts}
+                            disabled={!ttsText.trim() || ttsGenerating}
+                            data-testid="button-generate-voiceover"
+                          >
+                            {ttsGenerating
+                              ? <><Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" /> Generating voiceover…</>
+                              : <><Mic className="h-3.5 w-3.5 mr-2" /> Generate Voiceover</>}
+                          </Button>
+
+                          {ttsDemoMsg && (
+                            <div className="rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 p-2.5">
+                              <p className="text-xs text-amber-700 dark:text-amber-300">{ttsDemoMsg}</p>
+                            </div>
+                          )}
+
+                          {ttsAudio && (
+                            <div className="space-y-2">
+                              <audio
+                                src={ttsAudio}
+                                controls
+                                className="w-full"
+                                data-testid="audio-result"
+                              />
+                              <a
+                                href={ttsAudio}
+                                download="voiceover.mp3"
+                                data-testid="button-download-audio"
+                              >
+                                <Button variant="outline" size="sm" className="w-full">
+                                  <Download className="h-3.5 w-3.5 mr-2" /> Download Audio
+                                </Button>
+                              </a>
                             </div>
                           )}
                         </CardContent>
