@@ -357,7 +357,7 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(socialConnections).where(eq(socialConnections.userId, userId));
   }
 
-  async connectSocial(data: { userId: number; platform: string; accountName?: string; accountId?: string; accountType?: string; pages?: string; profilePictureUrl?: string; displayName?: string; profileUrl?: string; followerCount?: number; accessToken?: string; refreshToken?: string; expiresAt?: string }) {
+  async connectSocial(data: { userId: number; platform: string; accountName?: string | null; accountId?: string | null; accountType?: string | null; pages?: string | null; profilePictureUrl?: string | null; displayName?: string | null; profileUrl?: string | null; followerCount?: number | null; accessToken?: string | null; refreshToken?: string | null; expiresAt?: string | null; pageId?: string | null; pageName?: string | null }) {
     // Upsert — replace if same user+platform exists
     const existing = await db.select().from(socialConnections)
       .where(sql`${socialConnections.userId} = ${data.userId} AND ${socialConnections.platform} = ${data.platform}`);

@@ -6,41 +6,48 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { I18nProvider } from "@/lib/i18n";
+import React, { lazy, Suspense } from "react";
 import NotFound from "@/pages/not-found";
 import LandingPage from "@/pages/landing";
 import AuthPage from "@/pages/auth-page";
 import UserDashboard from "@/pages/dashboard";
-import AdminDashboard from "@/pages/admin";
-import BotDetailPage from "@/pages/bot-detail";
-import PricingPage from "@/pages/pricing-page";
-import OutreachPage from "@/pages/outreach-page";
 import AiChat from "@/components/ai-chat";
 
-function ProtectedRoute({ component: Component }: { component: () => JSX.Element }) {
-  const { user, isLoading } = useAuth();
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen" data-testid="loading-spinner">
-        <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full" />
-      </div>
-    );
-  }
-  if (!user) return <Redirect to="/auth" />;
-  return <Component />;
+// Lazy-load heavy pages to reduce initial bundle size
+const AdminDashboard = lazy(() => import("@/pages/admin"));
+const BotDetailPage = lazy(() => import("@/pages/bot-detail"));
+const PricingPage = lazy(() => import("@/pages/pricing-page"));
+const OutreachPage = lazy(() => import("@/pages/outreach-page"));
+
+function PageSpinner() {
+  return (
+    <div className="flex items-center justify-center min-h-screen" data-testid="loading-spinner">
+      <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full" />
+    </div>
+  );
 }
 
-function AdminRoute({ component: Component }: { component: () => JSX.Element }) {
+function ProtectedRoute({ component: Component }: { component: React.ComponentType<any> }) {
   const { user, isLoading } = useAuth();
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen" data-testid="loading-spinner">
-        <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full" />
-      </div>
-    );
-  }
+  if (isLoading) return <PageSpinner />;
+  if (!user) return <Redirect to="/auth" />;
+  return (
+    <Suspense fallback={<PageSpinner />}>
+      <Component />
+    </Suspense>
+  );
+}
+
+function AdminRoute({ component: Component }: { component: React.ComponentType<any> }) {
+  const { user, isLoading } = useAuth();
+  if (isLoading) return <PageSpinner />;
   if (!user) return <Redirect to="/auth" />;
   if (user.role !== "admin") return <Redirect to="/dashboard" />;
-  return <Component />;
+  return (
+    <Suspense fallback={<PageSpinner />}>
+      <Component />
+    </Suspense>
+  );
 }
 
 function AppRouter() {
@@ -48,7 +55,11 @@ function AppRouter() {
     <Switch>
       <Route path="/" component={LandingPage} />
       <Route path="/auth" component={AuthPage} />
-      <Route path="/pricing" component={PricingPage} />
+      <Route path="/pricing">
+        <Suspense fallback={<PageSpinner />}>
+          <PricingPage />
+        </Suspense>
+      </Route>
       <Route path="/dashboard">
         <ProtectedRoute component={UserDashboard} />
       </Route>

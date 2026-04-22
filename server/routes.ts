@@ -603,7 +603,7 @@ export async function registerRoutes(server: Server, app: Express) {
 
   app.post("/api/user/bots/:botType/toggle", requireAuth, async (req: Request, res: Response) => {
     const userId = req.user!.id;
-    const { botType } = req.params;
+    const botType = String(req.params.botType);
     const bots = await storage.getBotConfigs(userId);
     const bot = bots.find((b) => b.botType === botType);
     if (!bot) return res.status(404).json({ message: "Bot not found" });
@@ -625,7 +625,7 @@ export async function registerRoutes(server: Server, app: Express) {
   // Trial funnel analytics — signups → active → expired → resumed → converted
   app.get("/api/admin/trial-funnel", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const days = parseInt((req.query.days as string) || "30", 10);
+      const days = parseInt(String(req.query.days || "30"), 10);
       const sinceIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
       const allUsers = await storage.getAllUsers();
       const newUsers = allUsers.filter((u: any) => u.createdAt >= sinceIso && u.role !== "admin");
@@ -1251,7 +1251,7 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
         quality: "standard",
       });
 
-      const imageUrl = response.data[0]?.url;
+      const imageUrl = response.data?.[0]?.url;
       if (!imageUrl) return res.status(500).json({ message: "No image returned" });
 
       await storage.createMedia({ userId: req.user!.id, type: "image", prompt: fullPrompt, url: imageUrl, status: "completed" });
@@ -1296,7 +1296,7 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
           model: "dall-e-3", prompt: scene, n: 1,
           size: "1792x1024", quality: "standard",
         });
-        if (response.data[0]?.url) frames.push(response.data[0].url);
+        if (response.data?.[0]?.url) frames.push(response.data[0].url);
       }
 
       await storage.createMedia({ userId: req.user!.id, type: "video-storyboard", prompt, url: JSON.stringify(frames), status: "completed" });
@@ -1813,7 +1813,7 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
   // Polls Replicate for the prediction result
   app.get("/api/media/video-status/:predictionId", requireAuth, async (req: Request, res: Response) => {
     try {
-      const { predictionId } = req.params;
+      const predictionId = String(req.params.predictionId);
 
       const REPLICATE_TOKEN = process.env.REPLICATE_API_TOKEN;
       if (!REPLICATE_TOKEN) {
@@ -1936,7 +1936,7 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
   });
 
   app.delete("/api/outreach/prospects/:id", requireAuth, async (req: Request, res: Response) => {
-    await storage.deleteProspect(parseInt(req.params.id, 10), req.user!.id);
+    await storage.deleteProspect(parseInt(String(req.params.id), 10), req.user!.id);
     res.json({ success: true });
   });
 
@@ -2029,7 +2029,7 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
   // Generate personalized draft messages for every prospect in a campaign
   app.post("/api/outreach/campaigns/:id/draft-all", requireAuth, requireActiveAccess, async (req: Request, res: Response) => {
     try {
-      const campaignId = parseInt(req.params.id, 10);
+      const campaignId = parseInt(String(req.params.id), 10);
       const campaign = await storage.getCampaign(campaignId, req.user!.id);
       if (!campaign) return res.status(404).json({ message: "Campaign not found" });
 
@@ -2099,7 +2099,7 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
 
   // Messages for a campaign
   app.get("/api/outreach/campaigns/:id/messages", requireAuth, async (req: Request, res: Response) => {
-    const campaignId = parseInt(req.params.id, 10);
+    const campaignId = parseInt(String(req.params.id), 10);
     const messages = await storage.listMessages(req.user!.id, campaignId);
     res.json(messages);
   });
@@ -2107,7 +2107,7 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
   // Edit a drafted message
   app.patch("/api/outreach/messages/:id", requireAuth, async (req: Request, res: Response) => {
     const { finalMessage, status } = req.body as any;
-    await storage.updateMessage(parseInt(req.params.id, 10), {
+    await storage.updateMessage(parseInt(String(req.params.id), 10), {
       ...(finalMessage !== undefined ? { finalMessage } : {}),
       ...(status !== undefined ? { status } : {}),
     });
@@ -2118,7 +2118,7 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
   // Real platform sends require connected OAuth with publishing scopes.
   app.post("/api/outreach/campaigns/:id/send", requireAuth, requireActiveAccess, async (req: Request, res: Response) => {
     try {
-      const campaignId = parseInt(req.params.id, 10);
+      const campaignId = parseInt(String(req.params.id), 10);
       const campaign = await storage.getCampaign(campaignId, req.user!.id);
       if (!campaign) return res.status(404).json({ message: "Campaign not found" });
       const messages = await storage.listMessages(req.user!.id, campaignId);

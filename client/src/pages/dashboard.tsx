@@ -324,9 +324,8 @@ export default function UserDashboard() {
                           </div>
                           <Switch
                             checked={isActive}
-                            onCheckedChange={(e) => {
-                              e.stopPropagation?.();
-                              canToggle && toggleBot.mutate(botType);
+                            onCheckedChange={() => {
+                              if (canToggle) toggleBot.mutate(botType);
                             }}
                             disabled={!canToggle || toggleBot.isPending}
                             data-testid={`switch-bot-${botType}`}

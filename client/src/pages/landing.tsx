@@ -155,9 +155,9 @@ export default function LandingPage() {
       <section className="py-16 px-4 sm:px-6 bg-card/50">
         <div className="max-w-5xl mx-auto">
           <div className="text-center mb-10">
-            <h2 className="text-xl sm:text-2xl font-bold text-foreground mb-2">5 AI Bots. One Platform.</h2>
+            <h2 className="text-xl sm:text-2xl font-bold text-foreground mb-2">9 AI Bots + Virtual AI Manager</h2>
             <p className="text-sm text-muted-foreground max-w-md mx-auto">
-              Each bot is purpose-built for a specific domain. Deploy them individually or run all five together.
+              Each bot is purpose-built for a specific domain. Deploy them individually or run all nine together with the Virtual AI Manager orchestrating.
             </p>
           </div>
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">

@@ -273,7 +273,7 @@ function ConnectedAccountsStrip({ connections }: { connections: any[] }) {
           })}
         </div>
         <div className="text-[11px] text-muted-foreground mt-2">
-          Connect accounts from any Bot \u2192 Actions tab. Outreach uses your authenticated session — rate-limited to stay compliant with each platform's ToS.
+          Connect accounts from any Bot → Actions tab. Outreach uses your authenticated session — rate-limited to stay compliant with each platform's ToS.
         </div>
       </CardContent>
     </Card>
