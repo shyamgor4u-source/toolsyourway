@@ -1,5 +1,7 @@
 import { Link } from "wouter";
 import { useAuth } from "@/lib/auth";
+import { useI18n } from "@/lib/i18n";
+import { LanguageSwitcher } from "@/components/language-switcher";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -58,6 +60,7 @@ const TRUST_STATS = [
 
 export default function LandingPage() {
   const { user } = useAuth();
+  const { t } = useI18n();
 
   const scrollToPricing = () => {
     document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
@@ -72,22 +75,23 @@ export default function LandingPage() {
             <Bot className="h-6 w-6 text-primary" />
             <span className="font-bold text-base tracking-tight text-primary">ToolsYourWay</span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <LanguageSwitcher compact />
             {user ? (
               <Link href="/dashboard">
-                <Button size="sm" data-testid="link-dashboard">Go to Dashboard</Button>
+                <Button size="sm" data-testid="link-dashboard">{t("nav.dashboard")}</Button>
               </Link>
             ) : (
               <>
                 <button
                   onClick={scrollToPricing}
-                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                  className="text-sm text-muted-foreground hover:text-foreground transition-colors hidden sm:inline"
                   data-testid="link-pricing"
                 >
-                  Pricing
+                  {t("nav.pricing")}
                 </button>
                 <Link href="/auth">
-                  <Button size="sm" data-testid="link-get-started-nav">Get Started</Button>
+                  <Button size="sm" data-testid="link-get-started-nav">{t("nav.signup")}</Button>
                 </Link>
               </>
             )}
@@ -100,15 +104,14 @@ export default function LandingPage() {
         <div className="max-w-3xl mx-auto text-center">
           <Badge variant="secondary" className="mb-4 text-xs font-medium px-3 py-1">
             <Zap className="h-3 w-3 mr-1" />
-            7-Day Free Trial — No Credit Card Required
+            {t("hero.badge")}
           </Badge>
           <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold tracking-tight text-foreground leading-tight mb-4">
-            Your AI Company.{" "}
-            <span style={{ color: "#E9A820" }}>Operating Now.</span>
+            {t("hero.title")}{" "}
+            <span style={{ color: "#E9A820" }}>{t("hero.title.accent")}</span>
           </h1>
           <p className="text-base sm:text-lg text-muted-foreground max-w-xl mx-auto mb-8 leading-relaxed">
-            9 specialized AI bots + Virtual AI Manager. Try everything free for 7 days —
-            no card required. Keep what you need, pay only for what you use.
+            {t("hero.subtitle")}
           </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
             {user ? (
@@ -121,7 +124,7 @@ export default function LandingPage() {
             ) : (
               <Link href="/auth">
                 <Button size="lg" className="px-8" data-testid="button-hero-get-started">
-                  Start 7-Day Free Trial
+                  {t("hero.cta")}
                   <ArrowRight className="ml-2 h-4 w-4" />
                 </Button>
               </Link>

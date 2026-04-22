@@ -37,6 +37,65 @@ export const PLAN_CAPS: Record<string, { videos: number; images: number; label: 
   enterprise:{ videos: 9999,   images: 9999, label: "Enterprise" },
 };
 
+// ============================================================
+// GEO + CURRENCY + LANGUAGE MAPPING
+// ============================================================
+export const COUNTRY_CONFIG: Record<string, { currency: string; currencySymbol: string; rate: number; language: string; langName: string; rtl?: boolean }> = {
+  // South Asia
+  IN: { currency: "INR", currencySymbol: "\u20B9", rate: 83,   language: "en",    langName: "English" }, // default en, user can switch to Hindi
+  PK: { currency: "PKR", currencySymbol: "\u20A8", rate: 280,  language: "en",    langName: "English" },
+  BD: { currency: "BDT", currencySymbol: "\u09F3", rate: 110,  language: "en",    langName: "English" },
+  LK: { currency: "LKR", currencySymbol: "Rs",     rate: 300,  language: "en",    langName: "English" },
+  NP: { currency: "NPR", currencySymbol: "Rs",     rate: 133,  language: "en",    langName: "English" },
+  // Middle East
+  AE: { currency: "AED", currencySymbol: "\u062F.\u0625", rate: 3.67, language: "ar", langName: "\u0627\u0644\u0639\u0631\u0628\u064A\u0629", rtl: true },
+  SA: { currency: "SAR", currencySymbol: "\u0631.\u0633", rate: 3.75, language: "ar", langName: "\u0627\u0644\u0639\u0631\u0628\u064A\u0629", rtl: true },
+  KW: { currency: "KWD", currencySymbol: "\u062F.\u0643", rate: 0.31, language: "ar", langName: "\u0627\u0644\u0639\u0631\u0628\u064A\u0629", rtl: true },
+  QA: { currency: "QAR", currencySymbol: "\u0631.\u0642", rate: 3.64, language: "ar", langName: "\u0627\u0644\u0639\u0631\u0628\u064A\u0629", rtl: true },
+  BH: { currency: "BHD", currencySymbol: ".\u062F.\u0628", rate: 0.38, language: "ar", langName: "\u0627\u0644\u0639\u0631\u0628\u064A\u0629", rtl: true },
+  OM: { currency: "OMR", currencySymbol: "\u0631.\u0639.", rate: 0.38, language: "ar", langName: "\u0627\u0644\u0639\u0631\u0628\u064A\u0629", rtl: true },
+  EG: { currency: "EGP", currencySymbol: "\u062C.\u0645", rate: 50,   language: "ar", langName: "\u0627\u0644\u0639\u0631\u0628\u064A\u0629", rtl: true },
+  // Southeast Asia
+  ID: { currency: "IDR", currencySymbol: "Rp",     rate: 16200, language: "id", langName: "Bahasa Indonesia" },
+  VN: { currency: "VND", currencySymbol: "\u20AB", rate: 25000, language: "vi", langName: "Ti\u1EBFng Vi\u1EC7t" },
+  TH: { currency: "THB", currencySymbol: "\u0E3F", rate: 36,    language: "th", langName: "\u0E44\u0E17\u0E22" },
+  PH: { currency: "PHP", currencySymbol: "\u20B1", rate: 57,    language: "en", langName: "English" },
+  MY: { currency: "MYR", currencySymbol: "RM",     rate: 4.7,   language: "ms", langName: "Bahasa Melayu" },
+  SG: { currency: "SGD", currencySymbol: "S$",     rate: 1.35,  language: "en", langName: "English" },
+  // Americas
+  US: { currency: "USD", currencySymbol: "$",      rate: 1,     language: "en", langName: "English" },
+  CA: { currency: "CAD", currencySymbol: "C$",     rate: 1.37,  language: "en", langName: "English" },
+  MX: { currency: "MXN", currencySymbol: "Mex$",   rate: 17,    language: "es", langName: "Espa\u00F1ol" },
+  BR: { currency: "BRL", currencySymbol: "R$",     rate: 5.1,   language: "pt", langName: "Portugu\u00EAs" },
+  // Europe
+  GB: { currency: "GBP", currencySymbol: "\u00A3", rate: 0.79,  language: "en", langName: "English" },
+  DE: { currency: "EUR", currencySymbol: "\u20AC", rate: 0.93,  language: "de", langName: "Deutsch" },
+  FR: { currency: "EUR", currencySymbol: "\u20AC", rate: 0.93,  language: "fr", langName: "Fran\u00E7ais" },
+  ES: { currency: "EUR", currencySymbol: "\u20AC", rate: 0.93,  language: "es", langName: "Espa\u00F1ol" },
+  IT: { currency: "EUR", currencySymbol: "\u20AC", rate: 0.93,  language: "it", langName: "Italiano" },
+  NL: { currency: "EUR", currencySymbol: "\u20AC", rate: 0.93,  language: "nl", langName: "Nederlands" },
+  // Africa
+  NG: { currency: "NGN", currencySymbol: "\u20A6", rate: 1600,  language: "en", langName: "English" },
+  KE: { currency: "KES", currencySymbol: "KSh",    rate: 130,   language: "en", langName: "English" },
+  ZA: { currency: "ZAR", currencySymbol: "R",      rate: 18.5,  language: "en", langName: "English" },
+  // Default
+  DEFAULT: { currency: "USD", currencySymbol: "$", rate: 1, language: "en", langName: "English" },
+};
+
+function detectCountry(req: Request): string {
+  // Cloudflare / Render / generic proxy headers
+  const cf = req.headers["cf-ipcountry"] as string | undefined;
+  if (cf && cf !== "XX" && cf !== "T1") return cf.toUpperCase();
+  const xCountry = req.headers["x-vercel-ip-country"] as string | undefined;
+  if (xCountry) return xCountry.toUpperCase();
+  const renderCountry = req.headers["x-render-region"] as string | undefined;
+  // Accept-Language fallback (crude, but better than nothing)
+  const al = (req.headers["accept-language"] as string | undefined) || "";
+  const m = al.match(/[a-z]{2}-([A-Z]{2})/);
+  if (m) return m[1];
+  return "DEFAULT";
+}
+
 export function getPlanCaps(user: any): { videos: number; images: number; label: string } {
   if (user?.role === "admin") return PLAN_CAPS.enterprise;
   const plan = user?.plan || "none";
@@ -209,6 +268,51 @@ export async function registerRoutes(server: Server, app: Express) {
   app.get("/api/auth/me", (req: Request, res: Response) => {
     if (!req.isAuthenticated()) return res.status(401).json({ message: "Not authenticated" });
     res.json(req.user);
+  });
+
+  // ============================================================
+  // GEO DETECTION — public endpoint (no auth)
+  // ============================================================
+  app.get("/api/geo", (req: Request, res: Response) => {
+    const country = detectCountry(req);
+    const cfg = COUNTRY_CONFIG[country] || COUNTRY_CONFIG.DEFAULT;
+    res.json({
+      country,
+      ...cfg,
+    });
+  });
+
+  // Localized pricing endpoint — takes country, returns plans in local currency
+  app.get("/api/pricing", (req: Request, res: Response) => {
+    const countryCode = (req.query.country as string || detectCountry(req)).toUpperCase();
+    const cfg = COUNTRY_CONFIG[countryCode] || COUNTRY_CONFIG.DEFAULT;
+    const convert = (usdCents: number) => Math.round((usdCents / 100) * cfg.rate);
+    const plans = {
+      starter: { key: "starter", nameKey: "plan.starter", priceCents: 700,  priceFoundersCents: 245,  caps: PLAN_CAPS.starter  },
+      bundle:  { key: "bundle",  nameKey: "plan.bundle",  priceCents: 4900, priceFoundersCents: 1715, caps: PLAN_CAPS.bundle   },
+      premium: { key: "premium", nameKey: "plan.premium", priceCents: 5900, priceFoundersCents: 2065, caps: PLAN_CAPS.premium  },
+    };
+    const withLocal = Object.fromEntries(
+      Object.entries(plans).map(([k, p]) => [k, {
+        ...p,
+        priceUsd: p.priceCents / 100,
+        priceFoundersUsd: p.priceFoundersCents / 100,
+        priceLocal: convert(p.priceCents),
+        priceFoundersLocal: convert(p.priceFoundersCents),
+      }])
+    );
+    // Founders discount is active until April 30, 2026
+    const foundersActive = new Date() < new Date("2026-04-30T23:59:59Z");
+    res.json({
+      country: countryCode,
+      currency: cfg.currency,
+      currencySymbol: cfg.currencySymbol,
+      language: cfg.language,
+      rtl: cfg.rtl || false,
+      foundersActive,
+      foundersEndsAt: "2026-04-30T23:59:59Z",
+      plans: withLocal,
+    });
   });
 
   app.get("/api/auth/providers", (_req: Request, res: Response) => {
@@ -421,6 +525,58 @@ export async function registerRoutes(server: Server, app: Express) {
   // ============================================================
   // ADMIN ROUTES
   // ============================================================
+  // Trial funnel analytics — signups → active → expired → resumed → converted
+  app.get("/api/admin/trial-funnel", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const days = parseInt((req.query.days as string) || "30", 10);
+      const sinceIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+      const allUsers = await storage.getAllUsers();
+      const newUsers = allUsers.filter((u: any) => u.createdAt >= sinceIso && u.role !== "admin");
+      const trialUsers = newUsers.filter((u: any) => u.trialEndsAt);
+
+      const now = Date.now();
+      const active = trialUsers.filter((u: any) => u.trialEndsAt && new Date(u.trialEndsAt).getTime() > now && (!u.plan || u.plan === "none"));
+      const expired = trialUsers.filter((u: any) => u.trialEndsAt && new Date(u.trialEndsAt).getTime() <= now && (!u.plan || u.plan === "none"));
+      const converted = trialUsers.filter((u: any) => u.plan && u.plan !== "none");
+      const resumed = trialUsers.filter((u: any) => u.hasUsedResumeTrial === 1);
+
+      const signups = trialUsers.length;
+      const conversionRate = signups > 0 ? (converted.length / signups) * 100 : 0;
+      const resumeRate = expired.length > 0 ? (resumed.length / (expired.length + resumed.length)) * 100 : 0;
+
+      // Daily cohort (last N days)
+      const byDay: Record<string, { signups: number; converted: number }> = {};
+      for (const u of trialUsers as any[]) {
+        const day = u.createdAt.slice(0, 10);
+        if (!byDay[day]) byDay[day] = { signups: 0, converted: 0 };
+        byDay[day].signups++;
+        if (u.plan && u.plan !== "none") byDay[day].converted++;
+      }
+      const cohort = Object.entries(byDay)
+        .map(([day, v]) => ({ day, ...v }))
+        .sort((a, b) => a.day.localeCompare(b.day));
+
+      res.json({
+        periodDays: days,
+        funnel: {
+          signups,
+          active: active.length,
+          expired: expired.length,
+          resumed: resumed.length,
+          converted: converted.length,
+        },
+        rates: {
+          conversionRate: Math.round(conversionRate * 10) / 10,
+          resumeRate: Math.round(resumeRate * 10) / 10,
+          activeRate: signups > 0 ? Math.round((active.length / signups) * 1000) / 10 : 0,
+        },
+        cohort,
+      });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   app.get("/api/admin/stats", requireAdmin, async (_req: Request, res: Response) => {
     const userCount = await storage.getUserCount();
     const { totalRevenue, activeCount, planBreakdown } = await storage.getRevenueStats();

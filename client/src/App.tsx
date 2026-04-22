@@ -5,6 +5,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/lib/auth";
+import { I18nProvider } from "@/lib/i18n";
 import NotFound from "@/pages/not-found";
 import LandingPage from "@/pages/landing";
 import AuthPage from "@/pages/auth-page";
@@ -67,10 +68,12 @@ function App() {
       <TooltipProvider>
         <Toaster />
         <AuthProvider>
-          <Router hook={useHashLocation}>
-            <AppRouter />
-            <AiChat />
-          </Router>
+          <I18nProvider>
+            <Router hook={useHashLocation}>
+              <AppRouter />
+              <AiChat />
+            </Router>
+          </I18nProvider>
         </AuthProvider>
       </TooltipProvider>
     </QueryClientProvider>
