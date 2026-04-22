@@ -11,6 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Link } from "wouter";
 import { TrialBanner, useTrialStatus } from "@/components/trial-banner";
 import { CreditsModal } from "@/components/credits-modal";
+import { UsageCard } from "@/components/usage-card";
 import { useState } from "react";
 import {
   Bot, Megaphone, Database, Mail, TrendingUp, Users,
@@ -234,6 +235,11 @@ export default function UserDashboard() {
                 </CardContent>
               </Card>
             )}
+
+            {/* Usage & Plan Caps */}
+            <div className="mb-6">
+              <UsageCard />
+            </div>
 
             {/* Quick Stats */}
             <div className="grid grid-cols-3 gap-4 mb-8">

@@ -98,6 +98,16 @@ export async function runTrialNudgeCheck() {
 
     // Mark all expired trials as expired in DB
     await storage.expireTrials();
+
+    // Monthly usage reset — for users whose reset date has passed
+    const usersNeedingReset = (allUsers as any[]).filter(u => {
+      if (!u.usageResetAt) return (u.videoUsageCount ?? 0) > 0 || (u.imageUsageCount ?? 0) > 0;
+      return new Date(u.usageResetAt).getTime() < now;
+    });
+    for (const u of usersNeedingReset) {
+      await storage.resetMonthlyUsage(u.id);
+      console.log(`[trial-cron] Reset monthly usage for user ${u.id}`);
+    }
   } catch (e) {
     console.warn("[trial-cron] Error:", e);
   }

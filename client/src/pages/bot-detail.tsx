@@ -1,7 +1,7 @@
 import { useAuth } from "@/lib/auth";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { TrialBanner, useTrialStatus } from "@/components/trial-banner";
+import { TrialBanner, useTrialStatus, useResumeTrial } from "@/components/trial-banner";
 import { CreditsModal } from "@/components/credits-modal";
 import { useLocation, useParams } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,7 +21,7 @@ import {
   ArrowLeft, Settings, Activity, BarChart3, Clock, CheckCircle2,
   AlertCircle, Globe, Calendar, Zap, Play, Pause,
   IndianRupee, Scale, Search, Headphones, Plus, Trash2, Loader2,
-  ImageIcon, Film, Sparkles, Mic, Download, Radio, Lock, Crown,
+  ImageIcon, Film, Sparkles, Mic, Download, Radio, Lock, Crown, RotateCcw,
 } from "lucide-react";
 import { Link as WLink } from "wouter";
 
@@ -29,6 +29,7 @@ import { Link as WLink } from "wouter";
 function PreviewModeOverlay() {
   const { data: trial } = useTrialStatus();
   const [creditsOpen, setCreditsOpen] = useState(false);
+  const resumeMut = useResumeTrial();
   if (!trial) return null;
   if (trial.status !== "expired" || trial.paygCredits > 0) return null;
   return (
@@ -40,9 +41,25 @@ function PreviewModeOverlay() {
         <div className="flex-1">
           <div className="font-semibold mb-1">Preview Mode — trial ended</div>
           <p className="text-sm opacity-90 mb-3">
-            You can still see your past work. To create new content, upgrade to a plan or buy PAYG credits.
+            You can still see your past work. {trial.canResumeTrial ? "Get 3 more days free, upgrade, or buy credits." : "Upgrade to a plan or buy PAYG credits to continue creating."}
           </p>
           <div className="flex flex-wrap gap-2">
+            {trial.canResumeTrial && (
+              <Button
+                size="sm"
+                className="bg-white/15 hover:bg-white/25 text-white border border-white/30"
+                onClick={() => resumeMut.mutate()}
+                disabled={resumeMut.isPending}
+                data-testid="button-overlay-resume"
+              >
+                {resumeMut.isPending ? (
+                  <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                ) : (
+                  <RotateCcw className="w-3.5 h-3.5 mr-1" />
+                )}
+                Get 3 More Days Free
+              </Button>
+            )}
             <WLink href="/pricing">
               <Button size="sm" className="bg-[#E9A820] hover:bg-[#C98A1A] text-[#1E1650] font-semibold" data-testid="button-overlay-upgrade">
                 <Crown className="w-3.5 h-3.5 mr-1" />
@@ -51,7 +68,7 @@ function PreviewModeOverlay() {
             </WLink>
             <Button size="sm" variant="outline" className="border-white/30 bg-transparent text-white hover:bg-white/10" onClick={() => setCreditsOpen(true)} data-testid="button-overlay-credits">
               <Zap className="w-3.5 h-3.5 mr-1" />
-              Buy PAYG Credits
+              Buy Credits
             </Button>
           </div>
         </div>

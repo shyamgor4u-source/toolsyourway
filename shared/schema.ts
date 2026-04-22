@@ -22,6 +22,7 @@ export const users = sqliteTable("users", {
   trialStartedAt: text("trial_started_at"), // ISO timestamp
   trialEndsAt: text("trial_ends_at"), // ISO timestamp — null = no trial (e.g. admin)
   trialStatus: text("trial_status").default("active"), // active | expired | converted | none
+  hasUsedResumeTrial: integer("has_used_resume_trial").default(0), // 0 or 1 — one-time resume allowed
   // PAYG credits (for overages beyond plan caps)
   paygCredits: integer("payg_credits").default(0), // credits available
   videoUsageCount: integer("video_usage_count").default(0), // monthly video generation count

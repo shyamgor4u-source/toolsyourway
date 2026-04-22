@@ -35,6 +35,7 @@ async function initDb() {
       trial_started_at TEXT,
       trial_ends_at TEXT,
       trial_status TEXT DEFAULT 'active',
+      has_used_resume_trial INTEGER DEFAULT 0,
       payg_credits INTEGER DEFAULT 0,
       video_usage_count INTEGER DEFAULT 0,
       image_usage_count INTEGER DEFAULT 0,
@@ -127,6 +128,7 @@ async function initDb() {
     "ALTER TABLE users ADD COLUMN trial_started_at TEXT",
     "ALTER TABLE users ADD COLUMN trial_ends_at TEXT",
     "ALTER TABLE users ADD COLUMN trial_status TEXT DEFAULT 'active'",
+    "ALTER TABLE users ADD COLUMN has_used_resume_trial INTEGER DEFAULT 0",
     "ALTER TABLE users ADD COLUMN payg_credits INTEGER DEFAULT 0",
     "ALTER TABLE users ADD COLUMN video_usage_count INTEGER DEFAULT 0",
     "ALTER TABLE users ADD COLUMN image_usage_count INTEGER DEFAULT 0",
@@ -363,6 +365,21 @@ export class DatabaseStorage implements IStorage {
 
   async markTrialConverted(userId: number) {
     await db.update(users).set({ trialStatus: "converted" }).where(eq(users.id, userId));
+  }
+
+  async resumeTrial(userId: number, newEndsAt: string) {
+    await client.execute({
+      sql: "UPDATE users SET trial_ends_at = ?, trial_status = 'active', has_used_resume_trial = 1 WHERE id = ?",
+      args: [newEndsAt, userId],
+    });
+  }
+
+  async resetMonthlyUsage(userId: number) {
+    const nextReset = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    await client.execute({
+      sql: "UPDATE users SET video_usage_count = 0, image_usage_count = 0, usage_reset_at = ? WHERE id = ?",
+      args: [nextReset, userId],
+    });
   }
 
   async seedAdmin() {

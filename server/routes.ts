@@ -27,6 +27,28 @@ function requireAdmin(req: Request, res: Response, next: NextFunction) {
   res.status(403).json({ message: "Admin access required" });
 }
 
+// Plan caps — monthly limits per plan tier
+export const PLAN_CAPS: Record<string, { videos: number; images: number; label: string }> = {
+  none:     { videos: 0,       images: 0,    label: "No plan" },
+  trial:    { videos: 5,       images: 50,   label: "Trial" },
+  starter:  { videos: 5,       images: 30,   label: "Starter (single bot)" },
+  bundle:   { videos: 30,      images: 200,  label: "All-9 Bundle" },
+  premium:  { videos: 60,      images: 500,  label: "Bundle + AI Manager" },
+  enterprise:{ videos: 9999,   images: 9999, label: "Enterprise" },
+};
+
+export function getPlanCaps(user: any): { videos: number; images: number; label: string } {
+  if (user?.role === "admin") return PLAN_CAPS.enterprise;
+  const plan = user?.plan || "none";
+  if (plan === "none") {
+    // Trial users get "trial" caps; expired users get 0
+    const trial = computeTrialState(user);
+    if (trial.status === "active") return PLAN_CAPS.trial;
+    return PLAN_CAPS.none;
+  }
+  return PLAN_CAPS[plan] || PLAN_CAPS.starter;
+}
+
 // Compute trial state — shared helper
 export function computeTrialState(user: any) {
   if (!user) return { status: "none", daysRemaining: 0, hoursRemaining: 0, endsAt: null };
@@ -202,13 +224,54 @@ export async function registerRoutes(server: Server, app: Express) {
   app.get("/api/user/trial-status", requireAuth, async (req: Request, res: Response) => {
     const fresh = await storage.getUser(req.user!.id);
     const trial = computeTrialState(fresh);
+    const caps = getPlanCaps(fresh);
     res.json({
       ...trial,
       plan: fresh?.plan || "none",
+      planLabel: caps.label,
       paygCredits: fresh?.paygCredits ?? 0,
       videoUsageCount: fresh?.videoUsageCount ?? 0,
       imageUsageCount: fresh?.imageUsageCount ?? 0,
+      videoCap: caps.videos,
+      imageCap: caps.images,
+      usageResetAt: fresh?.usageResetAt || null,
+      hasUsedResumeTrial: (fresh as any)?.hasUsedResumeTrial === 1,
+      canResumeTrial: trial.status === "expired" && !(fresh as any)?.hasUsedResumeTrial,
     });
+  });
+
+  // ============================================================
+  // RESUME TRIAL — one-time 3-day extension for expired users
+  // ============================================================
+  app.post("/api/user/resume-trial", requireAuth, async (req: Request, res: Response) => {
+    const fresh = await storage.getUser(req.user!.id);
+    if (!fresh) return res.status(404).json({ message: "User not found" });
+    if (fresh.role === "admin") return res.status(400).json({ message: "Admins have unlimited access" });
+    if (fresh.plan && fresh.plan !== "none") return res.status(400).json({ message: "You already have an active plan" });
+    if ((fresh as any).hasUsedResumeTrial === 1) {
+      return res.status(400).json({ message: "You've already used your resume trial. Upgrade to continue." });
+    }
+    const trial = computeTrialState(fresh);
+    if (trial.status === "active") return res.status(400).json({ message: "Your trial is still active" });
+
+    // Grant 3-day extension
+    const newEnd = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
+    await storage.resumeTrial(req.user!.id, newEnd);
+
+    // Confirmation email
+    if (process.env.RESEND_API_KEY) {
+      try {
+        const resend = new Resend(process.env.RESEND_API_KEY);
+        await resend.emails.send({
+          from: "ToolsYourWay <hello@toolsyourway.com>",
+          to: fresh.email,
+          subject: "Welcome back \u2014 3-day trial extension activated",
+          html: `<div style="font-family:Inter,Arial,sans-serif;max-width:560px;margin:0 auto;padding:32px;color:#1E1650"><h1>You're back in, ${fresh.name}</h1><p>Your trial has been extended by <strong>3 more days</strong>. Full access to all 9 bots + AI Manager is restored.</p><p><strong>New trial ends:</strong> ${new Date(newEnd).toDateString()}</p><p><a href="https://toolsyourway.com/#/dashboard" style="display:inline-block;background:#1E1650;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:600">Open Dashboard</a></p></div>`,
+        });
+      } catch (e) { console.warn("Resume email failed:", e); }
+    }
+
+    res.json({ success: true, trialEndsAt: newEnd });
   });
 
   // ============================================================
@@ -927,6 +990,12 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
       if (!imageUrl) return res.status(500).json({ message: "No image returned" });
 
       await storage.createMedia({ userId: req.user!.id, type: "image", prompt: fullPrompt, url: imageUrl, status: "completed" });
+      await storage.incrementUsage(req.user!.id, "image");
+      // Deduct credit if trial expired (1 credit per image)
+      const fresh_img = await storage.getUser(req.user!.id);
+      if (fresh_img && (!fresh_img.plan || fresh_img.plan === "none") && computeTrialState(fresh_img).status === "expired") {
+        await storage.decrementCredits(req.user!.id, 1);
+      }
       res.json({ imageUrl, prompt: fullPrompt });
     } catch (err: any) {
       console.error("Image gen error:", err);
@@ -1508,6 +1577,11 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
 
         // Save to media gallery if storage supports it
         try {
+          await storage.incrementUsage(req.user!.id, "video");
+          const fresh_vid = await storage.getUser(req.user!.id);
+          if (fresh_vid && (!fresh_vid.plan || fresh_vid.plan === "none") && computeTrialState(fresh_vid).status === "expired") {
+            await storage.decrementCredits(req.user!.id, 2);
+          }
           await storage.createMedia({
             userId: req.user!.id,
             type: "video",
