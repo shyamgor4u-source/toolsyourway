@@ -13,6 +13,7 @@ import UserDashboard from "@/pages/dashboard";
 import AdminDashboard from "@/pages/admin";
 import BotDetailPage from "@/pages/bot-detail";
 import PricingPage from "@/pages/pricing-page";
+import OutreachPage from "@/pages/outreach-page";
 import AiChat from "@/components/ai-chat";
 
 function ProtectedRoute({ component: Component }: { component: () => JSX.Element }) {
@@ -56,6 +57,9 @@ function AppRouter() {
       </Route>
       <Route path="/bot/:botType">
         <ProtectedRoute component={BotDetailPage} />
+      </Route>
+      <Route path="/outreach">
+        <ProtectedRoute component={OutreachPage} />
       </Route>
       <Route component={NotFound} />
     </Switch>

@@ -1467,18 +1467,27 @@ export default function BotDetailPage() {
                               <div key={sp.key} className={`flex items-center gap-3 p-3.5 rounded-xl border transition-all ${
                                 conn ? "border-green-200 bg-green-50/50" : "border-border bg-muted/20 hover:border-primary/30"
                               }`} data-testid={`social-${sp.key}`}>
-                                <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: sp.bg }}>
-                                  <span className="text-lg">{sp.icon}</span>
+                                <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden relative" style={{ background: sp.bg }} data-testid={`avatar-${sp.key}`}>
+                                  {conn?.profilePictureUrl ? (
+                                    <img src={conn.profilePictureUrl} alt={conn.displayName || conn.accountName || sp.name} className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                                  ) : (
+                                    <span className="text-lg">{sp.icon}</span>
+                                  )}
+                                  {conn?.profilePictureUrl && (
+                                    <span className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full flex items-center justify-center text-[9px] bg-white border" style={{ background: sp.bg }}>
+                                      <span className="text-[8px]">{sp.icon}</span>
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="flex-1 min-w-0">
-                                  <div className="text-sm font-semibold text-foreground">{sp.name}</div>
+                                  <div className="text-sm font-semibold text-foreground truncate">{sp.name}</div>
                                   {conn ? (
-                                    <div className="text-[10px] text-green-600 font-medium flex items-center gap-1">
-                                      <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
-                                      {conn.pageName ? `${conn.pageName}` : conn.accountName || "Connected"}
-                                      {conn.accountType === "page" && <span className="text-[8px] text-muted-foreground ml-1">(Page)</span>}
-                                      {conn.accountType === "profile" && <span className="text-[8px] text-muted-foreground ml-1">(Profile)</span>}
-                                      {conn.accountType === "pending" && <span className="text-[8px] text-amber-600 ml-1">— Select page ↓</span>}
+                                    <div className="text-[11px] text-foreground/80 font-medium flex items-center gap-1 truncate">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block flex-shrink-0" />
+                                      <span className="truncate">{conn.displayName || conn.pageName || conn.accountName || "Connected"}</span>
+                                      {conn.accountType === "page" && <span className="text-[8px] text-muted-foreground">(Page)</span>}
+                                      {conn.accountType === "profile" && <span className="text-[8px] text-muted-foreground">(Profile)</span>}
+                                      {conn.accountType === "pending" && <span className="text-[8px] text-amber-600">— Pick page</span>}
                                     </div>
                                   ) : (
                                     <div className="text-[10px] text-muted-foreground">Not connected</div>

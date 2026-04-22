@@ -3,6 +3,8 @@ import { createClient } from "@libsql/client";
 import { eq, desc, count, sql } from "drizzle-orm";
 import {
   users, subscriptions, botConfigs, scheduledPosts, invoices, generatedMedia, socialConnections, creditPurchases,
+  prospects, outreachCampaigns, outreachMessages,
+  type Prospect, type InsertProspect, type Campaign, type InsertCampaign, type OutreachMessage,
   type User, type InsertUser,
   type Subscription, type InsertSubscription,
   type BotConfig, type InsertBotConfig,
@@ -97,6 +99,58 @@ async function initDb() {
       published_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS prospects (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      source TEXT DEFAULT 'manual',
+      name TEXT,
+      email TEXT,
+      company TEXT,
+      title TEXT,
+      location TEXT,
+      linkedin_url TEXT,
+      twitter_handle TEXT,
+      instagram_handle TEXT,
+      tiktok_handle TEXT,
+      youtube_channel TEXT,
+      profile_picture_url TEXT,
+      bio TEXT,
+      follower_count INTEGER,
+      engagement_rate TEXT,
+      tags TEXT,
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS outreach_campaigns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      name TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      goal TEXT,
+      tone TEXT DEFAULT 'professional',
+      status TEXT NOT NULL DEFAULT 'draft',
+      message_template TEXT,
+      prospect_ids TEXT,
+      sent_count INTEGER DEFAULT 0,
+      replied_count INTEGER DEFAULT 0,
+      scheduled_for TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS outreach_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      campaign_id INTEGER REFERENCES outreach_campaigns(id),
+      prospect_id INTEGER REFERENCES prospects(id),
+      platform TEXT NOT NULL,
+      draft_message TEXT,
+      final_message TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      sent_at TEXT,
+      replied_at TEXT,
+      reply TEXT,
+      error_message TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
     CREATE TABLE IF NOT EXISTS credit_purchases (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL REFERENCES users(id),
@@ -133,6 +187,10 @@ async function initDb() {
     "ALTER TABLE users ADD COLUMN video_usage_count INTEGER DEFAULT 0",
     "ALTER TABLE users ADD COLUMN image_usage_count INTEGER DEFAULT 0",
     "ALTER TABLE users ADD COLUMN usage_reset_at TEXT",
+    "ALTER TABLE social_connections ADD COLUMN profile_picture_url TEXT",
+    "ALTER TABLE social_connections ADD COLUMN display_name TEXT",
+    "ALTER TABLE social_connections ADD COLUMN profile_url TEXT",
+    "ALTER TABLE social_connections ADD COLUMN follower_count INTEGER",
   ];
   for (const sql of migrations) {
     try { await client.execute(sql); } catch (e: any) {
@@ -299,7 +357,7 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(socialConnections).where(eq(socialConnections.userId, userId));
   }
 
-  async connectSocial(data: { userId: number; platform: string; accountName?: string; accountId?: string; accessToken?: string; refreshToken?: string; expiresAt?: string }) {
+  async connectSocial(data: { userId: number; platform: string; accountName?: string; accountId?: string; accountType?: string; pages?: string; profilePictureUrl?: string; displayName?: string; profileUrl?: string; followerCount?: number; accessToken?: string; refreshToken?: string; expiresAt?: string }) {
     // Upsert — replace if same user+platform exists
     const existing = await db.select().from(socialConnections)
       .where(sql`${socialConnections.userId} = ${data.userId} AND ${socialConnections.platform} = ${data.platform}`);
@@ -374,6 +432,54 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  // ---- OUTREACH ----
+  async listProspects(userId: number) {
+    return await db.select().from(prospects).where(eq(prospects.userId, userId)).orderBy(desc(prospects.createdAt));
+  }
+  async createProspect(data: InsertProspect) {
+    const rows = await db.insert(prospects).values(data).returning();
+    return rows[0];
+  }
+  async bulkCreateProspects(userId: number, list: Partial<InsertProspect>[]) {
+    const toInsert = list.map(p => ({ ...p, userId })) as InsertProspect[];
+    if (toInsert.length === 0) return [];
+    const rows = await db.insert(prospects).values(toInsert).returning();
+    return rows;
+  }
+  async deleteProspect(id: number, userId: number) {
+    await client.execute({ sql: "DELETE FROM prospects WHERE id = ? AND user_id = ?", args: [id, userId] });
+  }
+
+  async listCampaigns(userId: number) {
+    return await db.select().from(outreachCampaigns).where(eq(outreachCampaigns.userId, userId)).orderBy(desc(outreachCampaigns.createdAt));
+  }
+  async getCampaign(id: number, userId: number) {
+    const rows = await db.select().from(outreachCampaigns).where(eq(outreachCampaigns.id, id));
+    const c = rows[0];
+    return c && c.userId === userId ? c : undefined;
+  }
+  async createCampaign(data: InsertCampaign) {
+    const rows = await db.insert(outreachCampaigns).values(data).returning();
+    return rows[0];
+  }
+  async updateCampaign(id: number, userId: number, patch: Partial<Campaign>) {
+    await db.update(outreachCampaigns).set(patch).where(eq(outreachCampaigns.id, id));
+  }
+
+  async listMessages(userId: number, campaignId?: number) {
+    const rows = campaignId
+      ? await db.select().from(outreachMessages).where(eq(outreachMessages.campaignId, campaignId))
+      : await db.select().from(outreachMessages).where(eq(outreachMessages.userId, userId));
+    return rows.sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1));
+  }
+  async createMessage(data: Partial<OutreachMessage>) {
+    const rows = await db.insert(outreachMessages).values(data as any).returning();
+    return rows[0];
+  }
+  async updateMessage(id: number, patch: Partial<OutreachMessage>) {
+    await db.update(outreachMessages).set(patch).where(eq(outreachMessages.id, id));
+  }
+
   async resetMonthlyUsage(userId: number) {
     const nextReset = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
     await client.execute({
@@ -402,10 +508,11 @@ export class DatabaseStorage implements IStorage {
         password: hashedPassword,
         authProvider: "email",
         role: "admin",
-        plan: "bundle",
+        plan: "enterprise", // unlimited caps for admin
         userType: "business",
         selectedBots: JSON.stringify(["marketing","data","email","sales","hr","finance","legal","seo","support"]),
         hasAiManager: 1,
+        trialStatus: "converted", // admin is "converted" — skips all trial UI
       });
       // Create a free Premium subscription
       await db.insert(subscriptions).values({

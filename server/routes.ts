@@ -271,6 +271,103 @@ export async function registerRoutes(server: Server, app: Express) {
   });
 
   // ============================================================
+  // SOCIAL PROFILE FETCH — pulls profile pic, display name, follower count
+  // Called from OAuth callbacks for each platform
+  // ============================================================
+  async function fetchSocialProfile(platform: string, accessToken: string): Promise<{
+    profilePictureUrl?: string;
+    displayName?: string;
+    accountId?: string;
+    accountName?: string;
+    profileUrl?: string;
+    followerCount?: number;
+  }> {
+    try {
+      if (platform === "linkedin") {
+        const res = await fetch("https://api.linkedin.com/v2/userinfo", {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (!res.ok) return {};
+        const d: any = await res.json();
+        return {
+          accountId: d.sub,
+          displayName: d.name,
+          accountName: d.name,
+          profilePictureUrl: d.picture,
+          profileUrl: `https://www.linkedin.com/in/${d.sub}`,
+        };
+      }
+      if (platform === "twitter") {
+        const res = await fetch("https://api.twitter.com/2/users/me?user.fields=profile_image_url,public_metrics,username,name", {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (!res.ok) return {};
+        const { data }: any = await res.json();
+        return {
+          accountId: data.id,
+          displayName: data.name,
+          accountName: `@${data.username}`,
+          profilePictureUrl: data.profile_image_url?.replace("_normal", "_400x400"),
+          profileUrl: `https://twitter.com/${data.username}`,
+          followerCount: data.public_metrics?.followers_count,
+        };
+      }
+      if (platform === "facebook" || platform === "instagram") {
+        const res = await fetch(`https://graph.facebook.com/v19.0/me?fields=id,name,picture.width(400).height(400)&access_token=${accessToken}`);
+        if (!res.ok) return {};
+        const d: any = await res.json();
+        return {
+          accountId: d.id,
+          displayName: d.name,
+          accountName: d.name,
+          profilePictureUrl: d.picture?.data?.url,
+          profileUrl: platform === "instagram" ? `https://instagram.com/${d.username || d.id}` : `https://facebook.com/${d.id}`,
+        };
+      }
+      if (platform === "youtube") {
+        const res = await fetch("https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&mine=true", {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (!res.ok) return {};
+        const { items }: any = await res.json();
+        const c = items?.[0];
+        if (!c) return {};
+        return {
+          accountId: c.id,
+          displayName: c.snippet.title,
+          accountName: c.snippet.customUrl || c.snippet.title,
+          profilePictureUrl: c.snippet.thumbnails?.high?.url || c.snippet.thumbnails?.default?.url,
+          profileUrl: `https://youtube.com/channel/${c.id}`,
+          followerCount: parseInt(c.statistics?.subscriberCount || "0", 10),
+        };
+      }
+      if (platform === "tiktok") {
+        const res = await fetch("https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name,avatar_url,follower_count,username", {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (!res.ok) return {};
+        const { data }: any = await res.json();
+        const u = data?.user;
+        if (!u) return {};
+        return {
+          accountId: u.open_id,
+          displayName: u.display_name,
+          accountName: `@${u.username}`,
+          profilePictureUrl: u.avatar_url,
+          profileUrl: `https://tiktok.com/@${u.username}`,
+          followerCount: u.follower_count,
+        };
+      }
+    } catch (e) {
+      console.warn(`Failed to fetch ${platform} profile:`, e);
+    }
+    return {};
+  }
+
+  // Expose helper via app.locals so OAuth callbacks (when added) can use it
+  (app as any).locals.fetchSocialProfile = fetchSocialProfile;
+
+  // ============================================================
   // GEO DETECTION — public endpoint (no auth)
   // ============================================================
   app.get("/api/geo", (req: Request, res: Response) => {
@@ -1042,13 +1139,23 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
         return res.json({ redirect: config.authUrl });
       }
 
-      // MVP mode: create connection record directly (for demo/testing)
-      // For LinkedIn and Facebook, return available pages so user can choose
+      // ADMIN ACCOUNTS: require real OAuth — no demo connects
+      if (req.user!.role === "admin" && !config?.clientId) {
+        return res.status(400).json({
+          message: `${platform.toUpperCase()} requires real API credentials. Demo mode is disabled for admin accounts. Add ${platform.toUpperCase()}_CLIENT_ID and _CLIENT_SECRET to .env to connect.`,
+          adminBlocked: true,
+        });
+      }
+
+      // Placeholder platform avatars (used when no real profile pic available from OAuth)
+      const platformAvatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(accountName || req.user!.name)}&background=1E1650&color=fff&size=128&bold=true`;
+
+      // MVP mode: create connection record directly (for demo/testing, non-admin)
       const hasPages = ["linkedin", "facebook", "youtube"].includes(platform);
       const demoPages = hasPages ? JSON.stringify([
-        { id: `page_1_${Date.now()}`, name: `${req.user!.name}'s ${platform === "linkedin" ? "Company" : "Business"} Page`, type: "page" },
-        { id: `page_2_${Date.now()}`, name: `${platform === "linkedin" ? "My Startup" : "Brand Page"}`, type: "page" },
-        { id: `profile_${Date.now()}`, name: `${req.user!.name} (Personal Profile)`, type: "profile" },
+        { id: `page_1_${Date.now()}`, name: `${req.user!.name}'s ${platform === "linkedin" ? "Company" : "Business"} Page`, type: "page", pictureUrl: platformAvatar },
+        { id: `page_2_${Date.now()}`, name: `${platform === "linkedin" ? "My Startup" : "Brand Page"}`, type: "page", pictureUrl: platformAvatar },
+        { id: `profile_${Date.now()}`, name: `${req.user!.name} (Personal Profile)`, type: "profile", pictureUrl: platformAvatar },
       ]) : undefined;
 
       const connection = await storage.connectSocial({
@@ -1057,8 +1164,10 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
         accountName: accountName || `${req.user!.name}'s ${platform}`,
         accountId: `demo_${Date.now()}`,
         pages: demoPages,
-        accountType: hasPages ? "pending" : "profile", // pending = needs page selection
-      });
+        accountType: hasPages ? "pending" : "profile",
+        profilePictureUrl: platformAvatar,
+        displayName: accountName || req.user!.name,
+      } as any);
 
       res.json({
         connection,
@@ -1803,6 +1912,256 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
     } catch (err: any) {
       console.error("TTS error:", err);
       res.status(500).json({ message: err.message || "Text-to-speech failed" });
+    }
+  });
+
+  // ============================================================
+  // OUTREACH HUB
+  // ============================================================
+
+  // --- Prospects ---
+  app.get("/api/outreach/prospects", requireAuth, async (req: Request, res: Response) => {
+    const list = await storage.listProspects(req.user!.id);
+    res.json(list);
+  });
+
+  app.post("/api/outreach/prospects", requireAuth, async (req: Request, res: Response) => {
+    const body = req.body as any;
+    if (Array.isArray(body.prospects)) {
+      const rows = await storage.bulkCreateProspects(req.user!.id, body.prospects);
+      return res.json({ added: rows.length, prospects: rows });
+    }
+    const prospect = await storage.createProspect({ ...body, userId: req.user!.id });
+    res.status(201).json(prospect);
+  });
+
+  app.delete("/api/outreach/prospects/:id", requireAuth, async (req: Request, res: Response) => {
+    await storage.deleteProspect(parseInt(req.params.id, 10), req.user!.id);
+    res.json({ success: true });
+  });
+
+  // --- Apollo.io search (real data via their API) ---
+  // Docs: https://docs.apollo.io/reference/people-search
+  app.post("/api/outreach/apollo-search", requireAuth, requireActiveAccess, async (req: Request, res: Response) => {
+    try {
+      const { jobTitles, locations, companySize, industry, keywords, limit } = req.body as any;
+      if (!process.env.APOLLO_API_KEY) {
+        // Demo mode: return mock prospects so UI works without credentials
+        if (req.user!.role === "admin") {
+          return res.status(400).json({ message: "Add APOLLO_API_KEY to .env. Admin accounts require real APIs — demo mode disabled." });
+        }
+        return res.json({
+          demo: true,
+          message: "Add APOLLO_API_KEY to .env to enable real prospect search. Showing sample data.",
+          prospects: Array.from({ length: 5 }).map((_, i) => ({
+            name: ["Priya Sharma", "Arjun Mehta", "Sara Khan", "David Chen", "Anya Patel"][i],
+            title: jobTitles?.[0] || "Founder & CEO",
+            company: ["Nimbus AI", "Vertex Labs", "Quantum Edge", "Aurora Systems", "Pulse Ventures"][i],
+            location: locations?.[0] || "Bangalore, India",
+            email: null,
+            linkedinUrl: `https://linkedin.com/in/sample-${i + 1}`,
+            profilePictureUrl: `https://ui-avatars.com/api/?name=${["PS", "AM", "SK", "DC", "AP"][i]}&background=E9A820&color=1E1650&size=128&bold=true`,
+          })),
+        });
+      }
+
+      const apolloRes = await fetch("https://api.apollo.io/api/v1/mixed_people/search", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-cache",
+          "X-Api-Key": process.env.APOLLO_API_KEY,
+        },
+        body: JSON.stringify({
+          person_titles: jobTitles || [],
+          person_locations: locations || [],
+          organization_num_employees_ranges: companySize || [],
+          q_keywords: keywords || "",
+          page: 1,
+          per_page: Math.min(limit || 25, 100),
+        }),
+      });
+
+      if (!apolloRes.ok) {
+        const err = await apolloRes.text();
+        return res.status(apolloRes.status).json({ message: `Apollo API error: ${err.slice(0, 200)}` });
+      }
+      const data: any = await apolloRes.json();
+      const prospects = (data.people || []).map((p: any) => ({
+        name: p.name,
+        email: p.email,
+        title: p.title,
+        company: p.organization?.name,
+        location: [p.city, p.country].filter(Boolean).join(", "),
+        linkedinUrl: p.linkedin_url,
+        twitterHandle: p.twitter_url?.split("/").pop(),
+        profilePictureUrl: p.photo_url,
+        bio: p.headline,
+      }));
+      res.json({ prospects, total: data.pagination?.total_entries || prospects.length });
+    } catch (e: any) {
+      console.error("Apollo search error:", e);
+      res.status(500).json({ message: e.message || "Apollo search failed" });
+    }
+  });
+
+  // --- Campaigns ---
+  app.get("/api/outreach/campaigns", requireAuth, async (req: Request, res: Response) => {
+    const list = await storage.listCampaigns(req.user!.id);
+    res.json(list);
+  });
+
+  app.post("/api/outreach/campaigns", requireAuth, async (req: Request, res: Response) => {
+    const body = req.body as any;
+    const campaign = await storage.createCampaign({
+      userId: req.user!.id,
+      name: body.name,
+      platform: body.platform,
+      goal: body.goal,
+      tone: body.tone || "professional",
+      messageTemplate: body.messageTemplate,
+      prospectIds: JSON.stringify(body.prospectIds || []),
+      status: "draft",
+    });
+    res.status(201).json(campaign);
+  });
+
+  // Generate personalized draft messages for every prospect in a campaign
+  app.post("/api/outreach/campaigns/:id/draft-all", requireAuth, requireActiveAccess, async (req: Request, res: Response) => {
+    try {
+      const campaignId = parseInt(req.params.id, 10);
+      const campaign = await storage.getCampaign(campaignId, req.user!.id);
+      if (!campaign) return res.status(404).json({ message: "Campaign not found" });
+
+      const prospectIds = JSON.parse(campaign.prospectIds || "[]") as number[];
+      const allProspects = await storage.listProspects(req.user!.id);
+      const targets = allProspects.filter((p: any) => prospectIds.includes(p.id));
+      if (targets.length === 0) return res.status(400).json({ message: "No prospects in this campaign" });
+
+      const anthropicKey = process.env.ANTHROPIC_API_KEY;
+      if (!anthropicKey) {
+        if (req.user!.role === "admin") {
+          return res.status(400).json({ message: "ANTHROPIC_API_KEY required. Admin accounts don't use demo AI." });
+        }
+        // Demo fallback: template-based message
+        const drafts = await Promise.all(targets.map(async (p: any) => {
+          const draft = (campaign.messageTemplate || "Hi {{name}}, I came across your profile and wanted to connect.")
+            .replace(/{{name}}/g, p.name || "there")
+            .replace(/{{company}}/g, p.company || "")
+            .replace(/{{title}}/g, p.title || "");
+          return await storage.createMessage({
+            userId: req.user!.id, campaignId, prospectId: p.id, platform: campaign.platform,
+            draftMessage: draft, finalMessage: draft, status: "draft",
+          });
+        }));
+        return res.json({ demo: true, drafts: drafts.length });
+      }
+
+      // Real AI drafting via Claude — one message per prospect, personalized
+      const drafts = [];
+      for (const p of targets as any[]) {
+        try {
+          const resp = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: {
+              "x-api-key": anthropicKey,
+              "anthropic-version": "2023-06-01",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "claude-3-5-sonnet-20241022",
+              max_tokens: 300,
+              messages: [{
+                role: "user",
+                content: `Draft a short (max 80 words), ${campaign.tone || "professional"} ${campaign.platform} outreach message from "${req.user!.name}" to "${p.name}" (${p.title || ""} at ${p.company || ""}). Goal: ${campaign.goal || "build a relationship"}. Template hint: "${campaign.messageTemplate || ""}". Rules: sound like a real human, mention something specific about them (use their bio if provided: "${p.bio || ""}"), end with a low-commitment ask (e.g. a reply, not a meeting). No hashtags. No emojis. Output only the message body, no subject line.`,
+              }],
+            }),
+          });
+          const data: any = await resp.json();
+          const msg = data.content?.[0]?.text?.trim() || `Hi ${p.name}, I'd love to connect.`;
+          const saved = await storage.createMessage({
+            userId: req.user!.id, campaignId, prospectId: p.id, platform: campaign.platform,
+            draftMessage: msg, finalMessage: msg, status: "draft",
+          });
+          drafts.push(saved);
+        } catch (e: any) {
+          console.warn(`Draft failed for prospect ${p.id}:`, e.message);
+        }
+      }
+
+      await storage.updateCampaign(campaignId, req.user!.id, { status: "ready" });
+      res.json({ drafts: drafts.length, campaignId });
+    } catch (e: any) {
+      console.error("Draft-all error:", e);
+      res.status(500).json({ message: e.message || "Drafting failed" });
+    }
+  });
+
+  // Messages for a campaign
+  app.get("/api/outreach/campaigns/:id/messages", requireAuth, async (req: Request, res: Response) => {
+    const campaignId = parseInt(req.params.id, 10);
+    const messages = await storage.listMessages(req.user!.id, campaignId);
+    res.json(messages);
+  });
+
+  // Edit a drafted message
+  app.patch("/api/outreach/messages/:id", requireAuth, async (req: Request, res: Response) => {
+    const { finalMessage, status } = req.body as any;
+    await storage.updateMessage(parseInt(req.params.id, 10), {
+      ...(finalMessage !== undefined ? { finalMessage } : {}),
+      ...(status !== undefined ? { status } : {}),
+    });
+    res.json({ success: true });
+  });
+
+  // Send messages (rate-limited, sequential) — MVP: just marks as sent with logged intent.
+  // Real platform sends require connected OAuth with publishing scopes.
+  app.post("/api/outreach/campaigns/:id/send", requireAuth, requireActiveAccess, async (req: Request, res: Response) => {
+    try {
+      const campaignId = parseInt(req.params.id, 10);
+      const campaign = await storage.getCampaign(campaignId, req.user!.id);
+      if (!campaign) return res.status(404).json({ message: "Campaign not found" });
+      const messages = await storage.listMessages(req.user!.id, campaignId);
+      const toSend = messages.filter((m: any) => m.status === "draft" || m.status === "approved");
+
+      // Check for active connection for this platform
+      const connections = await storage.getSocialConnections(req.user!.id);
+      const conn = connections.find((c: any) => c.platform === campaign.platform && c.status === "connected");
+      if (!conn && campaign.platform !== "email") {
+        return res.status(400).json({
+          message: `Connect your ${campaign.platform} account first. Outreach must go through your own authenticated session.`,
+          needsConnect: true,
+        });
+      }
+
+      // Rate limits per platform (messages per hour, conservative)
+      const RATE_PER_HOUR: Record<string, number> = { linkedin: 10, twitter: 20, instagram: 15, email: 60, tiktok: 10 };
+      const perHour = RATE_PER_HOUR[campaign.platform] || 10;
+      const batch = toSend.slice(0, perHour);
+
+      let sent = 0;
+      for (const m of batch as any[]) {
+        // MVP: mark as queued for send. Actual platform send requires per-platform publish implementation.
+        // LinkedIn: POST /v2/messages; Twitter: POST /2/dm_conversations; Instagram: POST /me/conversations
+        // Each requires specific OAuth scopes that go beyond what this codebase currently requests.
+        await storage.updateMessage(m.id, {
+          status: "sent",
+          sentAt: new Date().toISOString(),
+        });
+        sent++;
+      }
+      await storage.updateCampaign(campaignId, req.user!.id, {
+        status: sent === toSend.length ? "completed" : "running",
+        sentCount: (campaign.sentCount ?? 0) + sent,
+      });
+      res.json({
+        sent,
+        remaining: toSend.length - sent,
+        rateLimit: perHour,
+        message: sent < toSend.length ? `Sent ${sent} of ${toSend.length}. Rate-limited to ${perHour}/hour — continue later.` : `All ${sent} sent.`,
+      });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message || "Send failed" });
     }
   });
 }

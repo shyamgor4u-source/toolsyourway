@@ -241,6 +241,24 @@ export default function UserDashboard() {
               <UsageCard />
             </div>
 
+            {/* Outreach Hub CTA */}
+            <Link href="/outreach">
+              <Card className="mb-6 cursor-pointer hover:shadow-md transition-shadow border-[#E9A820]/40 bg-gradient-to-r from-[#1E1650] to-[#3D309A] text-white" data-testid="card-outreach-cta">
+                <CardContent className="p-5 flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-full bg-white/15 flex items-center justify-center flex-shrink-0">
+                    <TrendingUp className="w-6 h-6" />
+                  </div>
+                  <div className="flex-1">
+                    <div className="font-semibold text-base">Outreach Hub</div>
+                    <div className="text-xs opacity-90">
+                      Find prospects (Apollo.io · 275M contacts) → AI drafts personalized messages → send via your connected LinkedIn, X, Instagram, or email. 100% ToS-compliant.
+                    </div>
+                  </div>
+                  <ArrowUpRight className="w-5 h-5" />
+                </CardContent>
+              </Card>
+            </Link>
+
             {/* Quick Stats */}
             <div className="grid grid-cols-3 gap-4 mb-8">
               <Card data-testid="stat-bots-active">

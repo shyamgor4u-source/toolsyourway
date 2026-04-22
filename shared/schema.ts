@@ -119,6 +119,10 @@ export const socialConnections = sqliteTable("social_connections", {
   pageId: text("page_id"), // selected page/company ID (for LinkedIn/Facebook)
   pageName: text("page_name"), // selected page name
   pages: text("pages"), // JSON array of available pages [{id, name, type}]
+  profilePictureUrl: text("profile_picture_url"), // URL to avatar/profile image
+  displayName: text("display_name"), // Human-readable name (e.g. "Shyam Gor" vs handle)
+  profileUrl: text("profile_url"), // Public URL to profile
+  followerCount: integer("follower_count"), // Latest known follower count
   accessToken: text("access_token"), // encrypted in production
   refreshToken: text("refresh_token"),
   status: text("status").notNull().default("connected"), // connected | expired | disconnected
@@ -183,3 +187,71 @@ export const creditPurchases = sqliteTable("credit_purchases", {
 });
 
 export type CreditPurchase = typeof creditPurchases.$inferSelect;
+
+// ============================================================
+// OUTREACH: PROSPECTS + CAMPAIGNS
+// ============================================================
+export const prospects = sqliteTable("prospects", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull().references(() => users.id),
+  source: text("source").default("manual"), // manual | csv | apollo | linkedin
+  // Identity
+  name: text("name"),
+  email: text("email"),
+  company: text("company"),
+  title: text("title"),
+  location: text("location"),
+  // Platform handles
+  linkedinUrl: text("linkedin_url"),
+  twitterHandle: text("twitter_handle"),
+  instagramHandle: text("instagram_handle"),
+  tiktokHandle: text("tiktok_handle"),
+  youtubeChannel: text("youtube_channel"),
+  // Enrichment
+  profilePictureUrl: text("profile_picture_url"),
+  bio: text("bio"),
+  followerCount: integer("follower_count"),
+  engagementRate: text("engagement_rate"), // stored as string "4.2%"
+  tags: text("tags"), // JSON array ["warm", "VC", "fintech"]
+  notes: text("notes"),
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+export const insertProspectSchema = createInsertSchema(prospects).omit({ id: true, createdAt: true });
+export type InsertProspect = z.infer<typeof insertProspectSchema>;
+export type Prospect = typeof prospects.$inferSelect;
+
+export const outreachCampaigns = sqliteTable("outreach_campaigns", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull().references(() => users.id),
+  name: text("name").notNull(),
+  platform: text("platform").notNull(), // linkedin | twitter | instagram | email | tiktok
+  goal: text("goal"), // intro | partnership | sponsorship | investment | sales
+  tone: text("tone").default("professional"), // professional | casual | enthusiastic
+  status: text("status").notNull().default("draft"), // draft | ready | running | completed | paused
+  messageTemplate: text("message_template"), // with {{name}}, {{company}}, {{hook}} placeholders
+  prospectIds: text("prospect_ids"), // JSON array of prospect IDs
+  sentCount: integer("sent_count").default(0),
+  repliedCount: integer("replied_count").default(0),
+  scheduledFor: text("scheduled_for"),
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+export const insertCampaignSchema = createInsertSchema(outreachCampaigns).omit({ id: true, createdAt: true, sentCount: true, repliedCount: true });
+export type InsertCampaign = z.infer<typeof insertCampaignSchema>;
+export type Campaign = typeof outreachCampaigns.$inferSelect;
+
+export const outreachMessages = sqliteTable("outreach_messages", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull().references(() => users.id),
+  campaignId: integer("campaign_id").references(() => outreachCampaigns.id),
+  prospectId: integer("prospect_id").references(() => prospects.id),
+  platform: text("platform").notNull(),
+  draftMessage: text("draft_message"), // AI-drafted text
+  finalMessage: text("final_message"), // after user edit
+  status: text("status").notNull().default("draft"), // draft | approved | sent | failed | replied
+  sentAt: text("sent_at"),
+  repliedAt: text("replied_at"),
+  reply: text("reply"),
+  errorMessage: text("error_message"),
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+export type OutreachMessage = typeof outreachMessages.$inferSelect;
