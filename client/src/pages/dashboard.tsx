@@ -9,6 +9,9 @@ import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "wouter";
+import { TrialBanner, useTrialStatus } from "@/components/trial-banner";
+import { CreditsModal } from "@/components/credits-modal";
+import { useState } from "react";
 import {
   Bot, Megaphone, Database, Mail, TrendingUp, Users,
   LogOut, Crown, Calendar, Zap, ArrowUpRight, Shield, LayoutDashboard,
@@ -149,6 +152,9 @@ export default function UserDashboard() {
           </div>
         </div>
       </header>
+
+      {/* Trial Banner — shows countdown or expired state */}
+      <TrialBanner />
 
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
         {isLoading ? (

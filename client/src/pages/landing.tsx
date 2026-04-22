@@ -100,15 +100,15 @@ export default function LandingPage() {
         <div className="max-w-3xl mx-auto text-center">
           <Badge variant="secondary" className="mb-4 text-xs font-medium px-3 py-1">
             <Zap className="h-3 w-3 mr-1" />
-            AI-Powered Business Automation
+            7-Day Free Trial — No Credit Card Required
           </Badge>
           <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold tracking-tight text-foreground leading-tight mb-4">
             Your AI Company.{" "}
             <span style={{ color: "#E9A820" }}>Operating Now.</span>
           </h1>
           <p className="text-base sm:text-lg text-muted-foreground max-w-xl mx-auto mb-8 leading-relaxed">
-            Deploy 5 specialized AI bots that handle marketing, data, email, sales, and HR. 
-            Your entire operations team, automated in minutes.
+            9 specialized AI bots + Virtual AI Manager. Try everything free for 7 days —
+            no card required. Keep what you need, pay only for what you use.
           </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
             {user ? (
@@ -121,7 +121,7 @@ export default function LandingPage() {
             ) : (
               <Link href="/auth">
                 <Button size="lg" className="px-8" data-testid="button-hero-get-started">
-                  Get Started
+                  Start 7-Day Free Trial
                   <ArrowRight className="ml-2 h-4 w-4" />
                 </Button>
               </Link>

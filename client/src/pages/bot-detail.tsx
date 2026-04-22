@@ -1,6 +1,8 @@
 import { useAuth } from "@/lib/auth";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { TrialBanner, useTrialStatus } from "@/components/trial-banner";
+import { CreditsModal } from "@/components/credits-modal";
 import { useLocation, useParams } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,8 +21,45 @@ import {
   ArrowLeft, Settings, Activity, BarChart3, Clock, CheckCircle2,
   AlertCircle, Globe, Calendar, Zap, Play, Pause,
   IndianRupee, Scale, Search, Headphones, Plus, Trash2, Loader2,
-  ImageIcon, Film, Sparkles, Mic, Download, Radio,
+  ImageIcon, Film, Sparkles, Mic, Download, Radio, Lock, Crown,
 } from "lucide-react";
+import { Link as WLink } from "wouter";
+
+// Preview-mode overlay — shown at top of bot pages when trial has ended and no credits
+function PreviewModeOverlay() {
+  const { data: trial } = useTrialStatus();
+  const [creditsOpen, setCreditsOpen] = useState(false);
+  if (!trial) return null;
+  if (trial.status !== "expired" || trial.paygCredits > 0) return null;
+  return (
+    <>
+      <div className="bg-gradient-to-br from-[#1E1650] to-[#3D309A] text-white rounded-xl p-5 mb-6 flex flex-col sm:flex-row items-start gap-4" data-testid="overlay-preview-mode">
+        <div className="w-10 h-10 rounded-full bg-white/15 flex items-center justify-center flex-shrink-0">
+          <Lock className="w-5 h-5" />
+        </div>
+        <div className="flex-1">
+          <div className="font-semibold mb-1">Preview Mode — trial ended</div>
+          <p className="text-sm opacity-90 mb-3">
+            You can still see your past work. To create new content, upgrade to a plan or buy PAYG credits.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <WLink href="/pricing">
+              <Button size="sm" className="bg-[#E9A820] hover:bg-[#C98A1A] text-[#1E1650] font-semibold" data-testid="button-overlay-upgrade">
+                <Crown className="w-3.5 h-3.5 mr-1" />
+                Upgrade Plan
+              </Button>
+            </WLink>
+            <Button size="sm" variant="outline" className="border-white/30 bg-transparent text-white hover:bg-white/10" onClick={() => setCreditsOpen(true)} data-testid="button-overlay-credits">
+              <Zap className="w-3.5 h-3.5 mr-1" />
+              Buy PAYG Credits
+            </Button>
+          </div>
+        </div>
+      </div>
+      <CreditsModal open={creditsOpen} onClose={() => setCreditsOpen(false)} />
+    </>
+  );
+}
 
 const BOT_META: Record<string, {
   icon: typeof Bot;
@@ -655,7 +694,10 @@ export default function BotDetailPage() {
         </div>
       </header>
 
+      <TrialBanner />
+
       <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
+        <PreviewModeOverlay />
         {isLoading ? (
           <div className="space-y-4">
             <Skeleton className="h-24 w-full rounded-lg" />

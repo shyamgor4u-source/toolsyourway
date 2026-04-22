@@ -2,7 +2,7 @@ import { drizzle } from "drizzle-orm/libsql";
 import { createClient } from "@libsql/client";
 import { eq, desc, count, sql } from "drizzle-orm";
 import {
-  users, subscriptions, botConfigs, scheduledPosts, invoices, generatedMedia, socialConnections,
+  users, subscriptions, botConfigs, scheduledPosts, invoices, generatedMedia, socialConnections, creditPurchases,
   type User, type InsertUser,
   type Subscription, type InsertSubscription,
   type BotConfig, type InsertBotConfig,
@@ -32,6 +32,13 @@ async function initDb() {
       selected_bots TEXT,
       has_ai_manager INTEGER DEFAULT 0,
       avatar_url TEXT,
+      trial_started_at TEXT,
+      trial_ends_at TEXT,
+      trial_status TEXT DEFAULT 'active',
+      payg_credits INTEGER DEFAULT 0,
+      video_usage_count INTEGER DEFAULT 0,
+      image_usage_count INTEGER DEFAULT 0,
+      usage_reset_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE TABLE IF NOT EXISTS subscriptions (
@@ -89,6 +96,17 @@ async function initDb() {
       published_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS credit_purchases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      pack TEXT NOT NULL,
+      credits INTEGER NOT NULL,
+      amount INTEGER NOT NULL,
+      payment_gateway TEXT,
+      payment_id TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
     CREATE TABLE IF NOT EXISTS invoices (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL REFERENCES users(id),
@@ -103,6 +121,23 @@ async function initDb() {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
+
+  // Migration: add trial/PAYG columns to existing users table (safe if already exist)
+  const migrations = [
+    "ALTER TABLE users ADD COLUMN trial_started_at TEXT",
+    "ALTER TABLE users ADD COLUMN trial_ends_at TEXT",
+    "ALTER TABLE users ADD COLUMN trial_status TEXT DEFAULT 'active'",
+    "ALTER TABLE users ADD COLUMN payg_credits INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN video_usage_count INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN image_usage_count INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN usage_reset_at TEXT",
+  ];
+  for (const sql of migrations) {
+    try { await client.execute(sql); } catch (e: any) {
+      // Ignore "duplicate column name" errors
+      if (!String(e?.message || "").includes("duplicate column")) console.warn("Migration:", e?.message);
+    }
+  }
 }
 
 // Exported so routes can await it before seeding
@@ -287,6 +322,47 @@ export class DatabaseStorage implements IStorage {
   async createMedia(data: { userId: number; type: string; prompt: string; url: string; status: string }) {
     const rows = await db.insert(generatedMedia).values(data).returning();
     return rows[0];
+  }
+
+  // ---- TRIAL & USAGE ----
+  async incrementUsage(userId: number, type: "video" | "image") {
+    const user = await this.getUser(userId);
+    if (!user) return;
+    const field = type === "video" ? "videoUsageCount" : "imageUsageCount";
+    const currentVal = type === "video" ? (user.videoUsageCount ?? 0) : (user.imageUsageCount ?? 0);
+    await db.update(users).set({ [field]: currentVal + 1 } as any).where(eq(users.id, userId));
+  }
+
+  async decrementCredits(userId: number, amount: number) {
+    const user = await this.getUser(userId);
+    if (!user) return;
+    const current = user.paygCredits ?? 0;
+    await db.update(users).set({ paygCredits: Math.max(0, current - amount) }).where(eq(users.id, userId));
+  }
+
+  async addCredits(userId: number, amount: number) {
+    const user = await this.getUser(userId);
+    if (!user) return;
+    const current = user.paygCredits ?? 0;
+    await db.update(users).set({ paygCredits: current + amount }).where(eq(users.id, userId));
+  }
+
+  async createCreditPurchase(data: { userId: number; pack: string; credits: number; amount: number; paymentGateway?: string; paymentId?: string; status?: string }) {
+    const rows = await db.insert(creditPurchases).values({ ...data, status: data.status || "pending" }).returning();
+    return rows[0];
+  }
+
+  async expireTrials() {
+    // Mark users whose trial has ended as expired (but not converted users)
+    const now = new Date().toISOString();
+    await client.execute({
+      sql: `UPDATE users SET trial_status = 'expired' WHERE trial_ends_at IS NOT NULL AND trial_ends_at < ? AND trial_status = 'active' AND (plan IS NULL OR plan = 'none') AND role != 'admin'`,
+      args: [now],
+    });
+  }
+
+  async markTrialConverted(userId: number) {
+    await db.update(users).set({ trialStatus: "converted" }).where(eq(users.id, userId));
   }
 
   async seedAdmin() {

@@ -27,6 +27,43 @@ function requireAdmin(req: Request, res: Response, next: NextFunction) {
   res.status(403).json({ message: "Admin access required" });
 }
 
+// Compute trial state — shared helper
+export function computeTrialState(user: any) {
+  if (!user) return { status: "none", daysRemaining: 0, hoursRemaining: 0, endsAt: null };
+  // Admins and paid plans — unlimited
+  if (user.role === "admin" || (user.plan && user.plan !== "none")) {
+    return { status: "paid", daysRemaining: 9999, hoursRemaining: 9999, endsAt: null };
+  }
+  if (!user.trialEndsAt) return { status: "none", daysRemaining: 0, hoursRemaining: 0, endsAt: null };
+  const now = Date.now();
+  const ends = new Date(user.trialEndsAt).getTime();
+  const msLeft = ends - now;
+  if (msLeft <= 0) {
+    return { status: "expired", daysRemaining: 0, hoursRemaining: 0, endsAt: user.trialEndsAt };
+  }
+  const daysRemaining = Math.ceil(msLeft / (1000 * 60 * 60 * 24));
+  const hoursRemaining = Math.ceil(msLeft / (1000 * 60 * 60));
+  return { status: "active", daysRemaining, hoursRemaining, endsAt: user.trialEndsAt };
+}
+
+// Gate bot-generation actions — block if trial expired AND no active plan AND no PAYG credits
+// Usage: app.post("/api/bots/xxx", requireAuth, requireActiveAccess, handler)
+function requireActiveAccess(req: Request, res: Response, next: NextFunction) {
+  const user = req.user as any;
+  if (!user) return res.status(401).json({ message: "Not authenticated" });
+  if (user.role === "admin") return next();
+  if (user.plan && user.plan !== "none") return next();
+  const trial = computeTrialState(user);
+  if (trial.status === "active") return next();
+  // Expired — allow if PAYG credits available (the route will deduct them)
+  if ((user.paygCredits ?? 0) > 0) return next();
+  return res.status(402).json({
+    message: "Your free trial has ended. Upgrade or buy credits to continue.",
+    code: "TRIAL_EXPIRED",
+    trial,
+  });
+}
+
 export async function registerRoutes(server: Server, app: Express) {
   // Trust proxy (Render/Railway/Heroku run behind a reverse proxy)
   app.set("trust proxy", 1);
@@ -71,6 +108,11 @@ export async function registerRoutes(server: Server, app: Express) {
       }
 
       const hashedPassword = await bcrypt.hash(password, 10);
+      // Start 7-day free trial on registration — full access to all 9 bots + AI Manager
+      const now = new Date();
+      const trialEnds = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+      const allBots = ["marketing", "data", "email", "sales", "hr", "finance", "legal", "seo", "support"];
+
       const user = await storage.createUser({
         email, name,
         password: hashedPassword,
@@ -78,7 +120,37 @@ export async function registerRoutes(server: Server, app: Express) {
         role: "user",
         plan: "none",
         userType: req.body.userType || "business",
+        trialStartedAt: now.toISOString(),
+        trialEndsAt: trialEnds.toISOString(),
+        trialStatus: "active",
+        selectedBots: JSON.stringify(allBots),
+        hasAiManager: 1,
       });
+
+      // Seed all 9 bots as active during trial
+      for (const botType of allBots) {
+        await storage.upsertBotConfig({
+          userId: user.id,
+          botType,
+          status: "active",
+          config: JSON.stringify({}),
+          metrics: JSON.stringify({ tasks: 0, successRate: 0 }),
+          lastRunAt: new Date().toISOString(),
+        });
+      }
+
+      // Welcome email (Day 0 nudge) — fire and forget
+      if (process.env.RESEND_API_KEY) {
+        try {
+          const resend = new Resend(process.env.RESEND_API_KEY);
+          await resend.emails.send({
+            from: "ToolsYourWay <hello@toolsyourway.com>",
+            to: email,
+            subject: "Welcome to ToolsYourWay \u2014 your 7-day free trial is live",
+            html: `<div style="font-family:Inter,Arial,sans-serif;max-width:560px;margin:0 auto;padding:32px;color:#1E1650"><h1 style="color:#1E1650">Welcome, ${name}</h1><p>Your 7-day free trial is active. Full access to all 9 AI bots + the Virtual AI Manager \u2014 no card required.</p><p><strong>Trial ends:</strong> ${trialEnds.toDateString()}</p><p><a href="https://toolsyourway.com/#/dashboard" style="display:inline-block;background:#1E1650;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:600">Open your dashboard</a></p><p style="color:#666;font-size:14px">Questions? Just reply to this email.</p></div>`,
+          });
+        } catch (e) { console.warn("Welcome email failed:", e); }
+      }
 
       const { password: _, authProviderId, ...safeUser } = user;
       req.login(safeUser as Express.User, (err) => {
@@ -122,6 +194,114 @@ export async function registerRoutes(server: Server, app: Express) {
       google: !!process.env.GOOGLE_CLIENT_ID,
       microsoft: !!process.env.MICROSOFT_CLIENT_ID,
     });
+  });
+
+  // ============================================================
+  // TRIAL STATUS
+  // ============================================================
+  app.get("/api/user/trial-status", requireAuth, async (req: Request, res: Response) => {
+    const fresh = await storage.getUser(req.user!.id);
+    const trial = computeTrialState(fresh);
+    res.json({
+      ...trial,
+      plan: fresh?.plan || "none",
+      paygCredits: fresh?.paygCredits ?? 0,
+      videoUsageCount: fresh?.videoUsageCount ?? 0,
+      imageUsageCount: fresh?.imageUsageCount ?? 0,
+    });
+  });
+
+  // ============================================================
+  // PAYG CREDITS — buy top-up packs
+  // ============================================================
+  const CREDIT_PACKS: Record<string, { credits: number; amount: number; label: string }> = {
+    small:  { credits: 10,  amount: 500,  label: "10 credits \u2014 $5" },    // ~5 videos or 20 images
+    medium: { credits: 25,  amount: 1000, label: "25 credits \u2014 $10" },   // best value
+    large:  { credits: 60,  amount: 2000, label: "60 credits \u2014 $20" },
+  };
+
+  app.get("/api/payments/credit-packs", requireAuth, (_req: Request, res: Response) => {
+    res.json(CREDIT_PACKS);
+  });
+
+  // Stripe credit purchase
+  app.post("/api/payments/credits/stripe", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { pack } = req.body as { pack: string };
+      const p = CREDIT_PACKS[pack];
+      if (!p) return res.status(400).json({ message: "Invalid pack" });
+      if (!process.env.STRIPE_SECRET_KEY) return res.status(500).json({ message: "Stripe not configured" });
+      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2024-06-20" as any });
+      const session = await stripe.checkout.sessions.create({
+        mode: "payment",
+        payment_method_types: ["card"],
+        line_items: [{
+          price_data: {
+            currency: "usd",
+            product_data: { name: `ToolsYourWay \u2014 ${p.credits} PAYG credits` },
+            unit_amount: p.amount,
+          },
+          quantity: 1,
+        }],
+        metadata: { userId: String(req.user!.id), pack, credits: String(p.credits), type: "credits" },
+        success_url: `${process.env.BASE_URL || "http://localhost:5000"}/#/dashboard?credits=success`,
+        cancel_url: `${process.env.BASE_URL || "http://localhost:5000"}/#/dashboard?credits=cancelled`,
+      });
+      // Record pending purchase
+      await storage.createCreditPurchase({
+        userId: req.user!.id, pack, credits: p.credits, amount: p.amount,
+        paymentGateway: "stripe", paymentId: session.id, status: "pending",
+      });
+      res.json({ url: session.url });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message || "Credit checkout failed" });
+    }
+  });
+
+  // Razorpay credit purchase (India)
+  app.post("/api/payments/credits/razorpay", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { pack } = req.body as { pack: string };
+      const p = CREDIT_PACKS[pack];
+      if (!p) return res.status(400).json({ message: "Invalid pack" });
+      if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET)
+        return res.status(500).json({ message: "Razorpay not configured" });
+      const rp = new Razorpay({ key_id: process.env.RAZORPAY_KEY_ID, key_secret: process.env.RAZORPAY_KEY_SECRET });
+      // Convert USD cents to INR paise approximately (1 USD \u2248 83 INR)
+      const amountInr = p.amount * 83;
+      const order = await rp.orders.create({
+        amount: amountInr,
+        currency: "INR",
+        notes: { userId: String(req.user!.id), pack, credits: String(p.credits), type: "credits" },
+      });
+      await storage.createCreditPurchase({
+        userId: req.user!.id, pack, credits: p.credits, amount: p.amount,
+        paymentGateway: "razorpay", paymentId: order.id, status: "pending",
+      });
+      res.json({ orderId: order.id, amount: amountInr, keyId: process.env.RAZORPAY_KEY_ID });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message || "Credit order failed" });
+    }
+  });
+
+  // Razorpay credit verification — credits credited on verify
+  app.post("/api/payments/credits/razorpay/verify", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { razorpay_order_id, razorpay_payment_id, razorpay_signature, pack } = req.body;
+      const p = CREDIT_PACKS[pack];
+      if (!p) return res.status(400).json({ message: "Invalid pack" });
+      const expectedSignature = crypto
+        .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET!)
+        .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+        .digest("hex");
+      if (expectedSignature !== razorpay_signature) {
+        return res.status(400).json({ message: "Invalid payment signature" });
+      }
+      await storage.addCredits(req.user!.id, p.credits);
+      res.json({ success: true, creditsAdded: p.credits });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message || "Verification failed" });
+    }
   });
 
   // ============================================================
@@ -196,7 +376,7 @@ export async function registerRoutes(server: Server, app: Express) {
   // ============================================================
   // VIRTUAL AI MANAGER — Chat endpoint
   // ============================================================
-  app.post("/api/chat", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/chat", requireAuth, requireActiveAccess, async (req: Request, res: Response) => {
     try {
       const { message, history } = req.body;
       if (!message || typeof message !== "string") {
@@ -375,7 +555,7 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
   // ============================================================
   // MARKETING BOT ROUTES
   // ============================================================
-  app.post("/api/bots/marketing/generate", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/bots/marketing/generate", requireAuth, requireActiveAccess, async (req: Request, res: Response) => {
     try {
       const { topic, platform, tone } = req.body;
       if (!topic || !platform) {
@@ -717,7 +897,7 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
   // ============================================================
   // AI IMAGE & VIDEO GENERATION
   // ============================================================
-  app.post("/api/media/generate-image", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/media/generate-image", requireAuth, requireActiveAccess, async (req: Request, res: Response) => {
     try {
       const { prompt, style, size } = req.body;
       if (!prompt) return res.status(400).json({ message: "Prompt is required" });
@@ -754,7 +934,7 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
     }
   });
 
-  app.post("/api/media/generate-video", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/media/generate-video", requireAuth, requireActiveAccess, async (req: Request, res: Response) => {
     try {
       const { prompt, style } = req.body;
       if (!prompt) return res.status(400).json({ message: "Prompt is required" });
@@ -1215,7 +1395,7 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
 
   // POST /api/media/generate-video-real
   // Creates a Replicate prediction for video generation and returns immediately
-  app.post("/api/media/generate-video-real", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/media/generate-video-real", requireAuth, requireActiveAccess, async (req: Request, res: Response) => {
     try {
       const { prompt, model = "minimax", style } = req.body as {
         prompt: string;
@@ -1356,7 +1536,7 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
 
   // POST /api/media/text-to-speech
   // Converts text to audio using OpenAI TTS
-  app.post("/api/media/text-to-speech", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/media/text-to-speech", requireAuth, requireActiveAccess, async (req: Request, res: Response) => {
     try {
       const { text, language } = req.body as { text: string; language?: string };
 

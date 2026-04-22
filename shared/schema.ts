@@ -18,6 +18,15 @@ export const users = sqliteTable("users", {
   selectedBots: text("selected_bots"), // JSON array of bot keys user purchased
   hasAiManager: integer("has_ai_manager").default(0), // 0 or 1
   avatarUrl: text("avatar_url"),
+  // Free Trial fields
+  trialStartedAt: text("trial_started_at"), // ISO timestamp
+  trialEndsAt: text("trial_ends_at"), // ISO timestamp — null = no trial (e.g. admin)
+  trialStatus: text("trial_status").default("active"), // active | expired | converted | none
+  // PAYG credits (for overages beyond plan caps)
+  paygCredits: integer("payg_credits").default(0), // credits available
+  videoUsageCount: integer("video_usage_count").default(0), // monthly video generation count
+  imageUsageCount: integer("image_usage_count").default(0), // monthly image generation count
+  usageResetAt: text("usage_reset_at"), // ISO timestamp — next monthly reset
   createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
 });
 
@@ -156,3 +165,20 @@ export const invoices = sqliteTable("invoices", {
 export const insertInvoiceSchema = createInsertSchema(invoices).omit({ id: true, createdAt: true });
 export type InsertInvoice = z.infer<typeof insertInvoiceSchema>;
 export type Invoice = typeof invoices.$inferSelect;
+
+// ============================================================
+// PAYG CREDIT PURCHASES
+// ============================================================
+export const creditPurchases = sqliteTable("credit_purchases", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull().references(() => users.id),
+  pack: text("pack").notNull(), // small | medium | large
+  credits: integer("credits").notNull(),
+  amount: integer("amount").notNull(), // cents
+  paymentGateway: text("payment_gateway"),
+  paymentId: text("payment_id"),
+  status: text("status").notNull().default("pending"), // pending | completed | failed
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+export type CreditPurchase = typeof creditPurchases.$inferSelect;
