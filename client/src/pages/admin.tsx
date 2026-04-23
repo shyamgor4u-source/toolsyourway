@@ -1,7 +1,7 @@
 import { useAuth } from "@/lib/auth";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
-import { useLocation } from "wouter";
+import { useLocation, Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/table";
 import {
   Bot, Users, CreditCard, DollarSign, BarChart3,
-  LogOut, ExternalLink, Shield, LayoutDashboard, Globe,
+  LogOut, ExternalLink, Shield, LayoutDashboard, Globe, TrendingUp,
 } from "lucide-react";
 
 interface AdminStats {
@@ -126,9 +126,17 @@ export default function AdminDashboard() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
-        <div className="mb-8">
-          <h1 className="text-xl font-bold text-foreground" data-testid="text-admin-title">Admin Dashboard</h1>
-          <p className="text-sm text-muted-foreground mt-1">Platform overview and user management</p>
+        <div className="mb-8 flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="text-xl font-bold text-foreground" data-testid="text-admin-title">Admin Dashboard</h1>
+            <p className="text-sm text-muted-foreground mt-1">Platform overview and user management</p>
+          </div>
+          <Link href="/admin/analytics">
+            <Button className="bg-[#1E1650] hover:bg-[#3D309A] text-white" data-testid="link-analytics">
+              <TrendingUp className="w-4 h-4 mr-2" />
+              Trial Funnel Analytics
+            </Button>
+          </Link>
         </div>
 
         {/* Stats Row */}

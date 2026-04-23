@@ -15,6 +15,7 @@ import AiChat from "@/components/ai-chat";
 
 // Lazy-load heavy pages to reduce initial bundle size
 const AdminDashboard = lazy(() => import("@/pages/admin"));
+const AdminAnalyticsPage = lazy(() => import("@/pages/admin-analytics"));
 const BotDetailPage = lazy(() => import("@/pages/bot-detail"));
 const PricingPage = lazy(() => import("@/pages/pricing-page"));
 const OutreachPage = lazy(() => import("@/pages/outreach-page"));
@@ -67,6 +68,9 @@ function AppRouter() {
       </Route>
       <Route path="/admin">
         <AdminRoute component={AdminDashboard} />
+      </Route>
+      <Route path="/admin/analytics">
+        <AdminRoute component={AdminAnalyticsPage} />
       </Route>
       <Route path="/bot/:botType">
         <ProtectedRoute component={BotDetailPage} />
