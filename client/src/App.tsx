@@ -18,6 +18,8 @@ const AdminDashboard = lazy(() => import("@/pages/admin"));
 const BotDetailPage = lazy(() => import("@/pages/bot-detail"));
 const PricingPage = lazy(() => import("@/pages/pricing-page"));
 const OutreachPage = lazy(() => import("@/pages/outreach-page"));
+const FoundersPage = lazy(() => import("@/pages/founders-page"));
+const InfluencersPage = lazy(() => import("@/pages/influencers-page"));
 
 function PageSpinner() {
   return (
@@ -71,6 +73,12 @@ function AppRouter() {
       </Route>
       <Route path="/outreach">
         <ProtectedRoute component={OutreachPage} />
+      </Route>
+      <Route path="/founders">
+        <ProtectedRoute component={FoundersPage} />
+      </Route>
+      <Route path="/influencers">
+        <ProtectedRoute component={InfluencersPage} />
       </Route>
       <Route component={NotFound} />
     </Switch>

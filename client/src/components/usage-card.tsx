@@ -75,7 +75,7 @@ export function UsageCard() {
               <Crown className="w-8 h-8 text-[#E9A820] mx-auto mb-2" />
               <div className="font-semibold text-[#1E1650]">Unlimited Access</div>
               <div className="text-sm text-muted-foreground">
-                {trial.videoUsageCount} videos \u00b7 {trial.imageUsageCount} images generated this month
+                {trial.videoUsageCount} videos · {trial.imageUsageCount} images generated this month
               </div>
             </div>
           ) : (

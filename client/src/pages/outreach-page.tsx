@@ -306,7 +306,7 @@ function ProspectRow({ prospect, selected, onToggle }: { prospect: Prospect; sel
       <div className="flex-1 min-w-0">
         <div className="text-sm font-semibold truncate">{prospect.name}</div>
         <div className="text-xs text-muted-foreground truncate">
-          {prospect.title} {prospect.company && `\u00b7 ${prospect.company}`}
+          {prospect.title} {prospect.company && `· ${prospect.company}`}
         </div>
       </div>
       <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -348,7 +348,7 @@ function CampaignRow({ campaign, onClick }: { campaign: Campaign; onClick: () =>
         <div className="flex-1 min-w-0">
           <div className="font-semibold text-sm truncate">{campaign.name}</div>
           <div className="text-xs text-muted-foreground">
-            {platform?.label || campaign.platform} \u00b7 {campaign.sentCount} sent
+            {platform?.label || campaign.platform} · {campaign.sentCount} sent
           </div>
         </div>
         <Badge className={`text-[10px] ${statusColors[campaign.status] || "bg-gray-100"}`}>
@@ -439,7 +439,7 @@ function ApolloSearchDialog({ open, onClose }: { open: boolean; onClose: () => v
         {results.length > 0 && (
           <div className="flex-1 overflow-y-auto space-y-1 mt-4 border-t pt-3">
             <div className="flex justify-between items-center mb-2">
-              <span className="text-xs text-muted-foreground">{results.length} results \u00b7 {selected.size} selected</span>
+              <span className="text-xs text-muted-foreground">{results.length} results · {selected.size} selected</span>
               <Button size="sm" disabled={selected.size === 0 || importMut.isPending} onClick={() => importMut.mutate()} data-testid="button-import-selected">
                 {importMut.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Plus className="w-3 h-3 mr-1" />}
                 Import {selected.size}
@@ -462,7 +462,7 @@ function ApolloSearchDialog({ open, onClose }: { open: boolean; onClose: () => v
                   <img src={p.profilePictureUrl} alt={p.name} className="w-8 h-8 rounded-full object-cover" />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium truncate">{p.name}</div>
-                    <div className="text-xs text-muted-foreground truncate">{p.title} \u00b7 {p.company}</div>
+                    <div className="text-xs text-muted-foreground truncate">{p.title} · {p.company}</div>
                   </div>
                   {p.linkedinUrl && <ExternalLink className="w-3 h-3 text-muted-foreground" />}
                 </div>
@@ -660,7 +660,7 @@ function CampaignDetailDialog({ campaign, onClose }: { campaign: Campaign; onClo
         <DialogHeader>
           <DialogTitle>{campaign.name}</DialogTitle>
           <DialogDescription>
-            {campaign.platform} \u00b7 {drafts.length} drafts \u00b7 {sent.length} sent
+            {campaign.platform} · {drafts.length} drafts · {sent.length} sent
           </DialogDescription>
         </DialogHeader>
         <div className="flex-1 overflow-y-auto space-y-2">
@@ -713,19 +713,19 @@ function CampaignDetailDialog({ campaign, onClose }: { campaign: Campaign; onClo
 // ============================================================
 const OUTREACH_TEMPLATES = [
   { audience: "Founder", key: "vc-intro", title: "VC Introduction", platform: "linkedin", tone: "professional",
-    body: "Hi {{name}}, I saw your recent investments in {{focus}} and wanted to introduce myself. I'm building {{my_product}} \u2014 would love to share a short 2-min overview and hear your POV." },
+    body: "Hi {{name}}, I saw your recent investments in {{focus}} and wanted to introduce myself. I'm building {{my_product}} — would love to share a short 2-min overview and hear your POV." },
   { audience: "Founder", key: "customer-discovery", title: "Customer Discovery", platform: "linkedin", tone: "casual",
     body: "Hi {{name}}, I'm researching how {{title}}s at {{company}}-sized companies handle X. Would you have 15 min for a call? No pitch — just learning." },
   { audience: "Founder", key: "partnership", title: "Partnership Inquiry", platform: "email", tone: "professional",
     body: "Hi {{name}}, your work on {{topic}} caught my attention. I run {{my_product}} and I see a clean integration opportunity. Open to a quick chat?" },
   { audience: "Founder", key: "hiring", title: "Hiring Cold Outreach", platform: "linkedin", tone: "casual",
-    body: "Hi {{name}}, your profile stood out \u2014 we're hiring a {{role}} at {{my_company}} and I'd love to tell you more. Interested?" },
+    body: "Hi {{name}}, your profile stood out — we're hiring a {{role}} at {{my_company}} and I'd love to tell you more. Interested?" },
   { audience: "Influencer", key: "brand-pitch", title: "Brand Collab Pitch", platform: "email", tone: "enthusiastic",
     body: "Hi {{name}}, I'm a {{niche}} creator with {{follower_count}}+ followers. Loved your recent campaign and would love to collaborate on a sponsored piece." },
   { audience: "Influencer", key: "rate-card-reply", title: "Rate Card Reply", platform: "email", tone: "professional",
-    body: "Hi {{name}}, thanks for the inquiry. Attaching my current rate card \u2014 happy to customize for your campaign timeline." },
+    body: "Hi {{name}}, thanks for the inquiry. Attaching my current rate card — happy to customize for your campaign timeline." },
   { audience: "Influencer", key: "podcast-request", title: "Podcast / Feature Request", platform: "instagram", tone: "casual",
-    body: "Hey {{name}}, I host a podcast about {{topic}}. Would love to have you on \u2014 we typically get X views per episode." },
+    body: "Hey {{name}}, I host a podcast about {{topic}}. Would love to have you on — we typically get X views per episode." },
   { audience: "Influencer", key: "cross-promo", title: "Cross-Promo Swap", platform: "instagram", tone: "casual",
     body: "Hi {{name}}, our audiences overlap nicely. Want to do a story swap or live together this month?" },
 ];

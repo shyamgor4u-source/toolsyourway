@@ -241,6 +241,38 @@ export default function UserDashboard() {
               <UsageCard />
             </div>
 
+            {/* Suites: Founders / Influencers / Outreach */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
+              <Link href="/founders">
+                <Card className="cursor-pointer hover:shadow-md transition-shadow border-[#1E1650]/30 h-full" data-testid="card-founders-cta">
+                  <CardContent className="p-4 flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-[#1E1650]/10 flex items-center justify-center flex-shrink-0">
+                      <Crown className="w-5 h-5 text-[#1E1650]" />
+                    </div>
+                    <div className="flex-1">
+                      <div className="font-semibold text-sm">Founder Suite</div>
+                      <div className="text-[11px] text-muted-foreground">Pitch deck · VC directory · Launch kit · Competitors</div>
+                    </div>
+                    <ArrowUpRight className="w-4 h-4 text-muted-foreground" />
+                  </CardContent>
+                </Card>
+              </Link>
+              <Link href="/influencers">
+                <Card className="cursor-pointer hover:shadow-md transition-shadow border-[#E9A820]/40 h-full" data-testid="card-influencers-cta">
+                  <CardContent className="p-4 flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-[#E9A820]/15 flex items-center justify-center flex-shrink-0">
+                      <Users className="w-5 h-5 text-[#C98A1A]" />
+                    </div>
+                    <div className="flex-1">
+                      <div className="font-semibold text-sm">Influencer Suite</div>
+                      <div className="text-[11px] text-muted-foreground">Media kit · Rate card · Brand collabs · Content calendar</div>
+                    </div>
+                    <ArrowUpRight className="w-4 h-4 text-muted-foreground" />
+                  </CardContent>
+                </Card>
+              </Link>
+            </div>
+
             {/* Outreach Hub CTA */}
             <Link href="/outreach">
               <Card className="mb-6 cursor-pointer hover:shadow-md transition-shadow border-[#E9A820]/40 bg-gradient-to-r from-[#1E1650] to-[#3D309A] text-white" data-testid="card-outreach-cta">

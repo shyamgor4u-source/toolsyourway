@@ -4,6 +4,7 @@ import { eq, desc, count, sql } from "drizzle-orm";
 import {
   users, subscriptions, botConfigs, scheduledPosts, invoices, generatedMedia, socialConnections, creditPurchases,
   prospects, outreachCampaigns, outreachMessages,
+  pitchDecks, competitors, launchKits, mediaKits, brandCollabs, contentCalendar,
   type Prospect, type InsertProspect, type Campaign, type InsertCampaign, type OutreachMessage,
   type User, type InsertUser,
   type Subscription, type InsertSubscription,
@@ -149,6 +150,65 @@ async function initDb() {
       replied_at TEXT,
       reply TEXT,
       error_message TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS pitch_decks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      company_name TEXT NOT NULL,
+      one_liner TEXT,
+      slides TEXT,
+      deck_url TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS competitors (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      name TEXT NOT NULL,
+      website TEXT,
+      description TEXT,
+      pricing TEXT,
+      strengths TEXT,
+      weaknesses TEXT,
+      recent_news TEXT,
+      logo_url TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS launch_kits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      product_name TEXT NOT NULL,
+      description TEXT,
+      ph_post TEXT, hn_post TEXT, twitter_thread TEXT, linkedin_post TEXT, email_blast TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS media_kits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      creator_name TEXT NOT NULL,
+      niche TEXT, bio TEXT, stats TEXT, rate_card TEXT,
+      past_brands TEXT, testimonials TEXT, contact_email TEXT, kit_url TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS brand_collabs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      brand_name TEXT NOT NULL,
+      brand_logo TEXT, contact_name TEXT, contact_email TEXT,
+      stage TEXT NOT NULL DEFAULT 'pitched',
+      deal_value INTEGER, currency TEXT DEFAULT 'USD',
+      deliverables TEXT, deadline TEXT, notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS content_calendar (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      date TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      content_type TEXT, topic TEXT, caption TEXT, hook TEXT, hashtags TEXT,
+      status TEXT DEFAULT 'idea',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE TABLE IF NOT EXISTS credit_purchases (
@@ -478,6 +538,67 @@ export class DatabaseStorage implements IStorage {
   }
   async updateMessage(id: number, patch: Partial<OutreachMessage>) {
     await db.update(outreachMessages).set(patch).where(eq(outreachMessages.id, id));
+  }
+
+  // ---- FOUNDER + INFLUENCER SUITES ----
+  async listPitchDecks(userId: number) {
+    return (await db.select().from(pitchDecks).where(eq(pitchDecks.userId, userId)).orderBy(desc(pitchDecks.createdAt))) as any[];
+  }
+  async createPitchDeck(data: Partial<typeof pitchDecks.$inferInsert>) {
+    const rows = await db.insert(pitchDecks).values(data as any).returning();
+    return rows[0];
+  }
+  async listCompetitors(userId: number) {
+    return (await db.select().from(competitors).where(eq(competitors.userId, userId)).orderBy(desc(competitors.createdAt))) as any[];
+  }
+  async createCompetitor(data: Partial<typeof competitors.$inferInsert>) {
+    const rows = await db.insert(competitors).values(data as any).returning();
+    return rows[0];
+  }
+  async deleteCompetitor(id: number, userId: number) {
+    await client.execute({ sql: "DELETE FROM competitors WHERE id = ? AND user_id = ?", args: [id, userId] });
+  }
+  async listLaunchKits(userId: number) {
+    return (await db.select().from(launchKits).where(eq(launchKits.userId, userId)).orderBy(desc(launchKits.createdAt))) as any[];
+  }
+  async createLaunchKit(data: Partial<typeof launchKits.$inferInsert>) {
+    const rows = await db.insert(launchKits).values(data as any).returning();
+    return rows[0];
+  }
+  async listMediaKits(userId: number) {
+    return (await db.select().from(mediaKits).where(eq(mediaKits.userId, userId)).orderBy(desc(mediaKits.createdAt))) as any[];
+  }
+  async createMediaKit(data: Partial<typeof mediaKits.$inferInsert>) {
+    const rows = await db.insert(mediaKits).values(data as any).returning();
+    return rows[0];
+  }
+  async listBrandCollabs(userId: number) {
+    return (await db.select().from(brandCollabs).where(eq(brandCollabs.userId, userId)).orderBy(desc(brandCollabs.createdAt))) as any[];
+  }
+  async createBrandCollab(data: Partial<typeof brandCollabs.$inferInsert>) {
+    const rows = await db.insert(brandCollabs).values(data as any).returning();
+    return rows[0];
+  }
+  async updateBrandCollab(id: number, userId: number, patch: any) {
+    await db.update(brandCollabs).set({ ...patch, updatedAt: new Date().toISOString() }).where(eq(brandCollabs.id, id));
+  }
+  async deleteBrandCollab(id: number, userId: number) {
+    await client.execute({ sql: "DELETE FROM brand_collabs WHERE id = ? AND user_id = ?", args: [id, userId] });
+  }
+  async listContentCalendar(userId: number) {
+    return (await db.select().from(contentCalendar).where(eq(contentCalendar.userId, userId)).orderBy(desc(contentCalendar.date))) as any[];
+  }
+  async bulkCreateCalendar(userId: number, entries: any[]) {
+    if (!entries.length) return [];
+    const toInsert = entries.map(e => ({ ...e, userId }));
+    const rows = await db.insert(contentCalendar).values(toInsert).returning();
+    return rows;
+  }
+  async updateCalendarEntry(id: number, userId: number, patch: any) {
+    await db.update(contentCalendar).set(patch).where(eq(contentCalendar.id, id));
+  }
+  async deleteCalendarEntry(id: number, userId: number) {
+    await client.execute({ sql: "DELETE FROM content_calendar WHERE id = ? AND user_id = ?", args: [id, userId] });
   }
 
   async resetMonthlyUsage(userId: number) {

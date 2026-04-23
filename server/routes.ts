@@ -1915,6 +1915,10 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
     }
   });
 
+  // Register Founder + Influencer + Publishing routes
+  const { registerFounderInfluencerRoutes } = await import("./founder-influencer-routes");
+  registerFounderInfluencerRoutes(app, requireAuth, requireActiveAccess);
+
   // ============================================================
   // OUTREACH HUB
   // ============================================================

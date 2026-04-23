@@ -255,3 +255,99 @@ export const outreachMessages = sqliteTable("outreach_messages", {
   createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
 });
 export type OutreachMessage = typeof outreachMessages.$inferSelect;
+
+// ============================================================
+// FOUNDER SUITE
+// ============================================================
+export const pitchDecks = sqliteTable("pitch_decks", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull().references(() => users.id),
+  companyName: text("company_name").notNull(),
+  oneLiner: text("one_liner"),
+  slides: text("slides"), // JSON array of {title, bullets, imagePrompt}
+  deckUrl: text("deck_url"), // URL to rendered HTML deck
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+export type PitchDeck = typeof pitchDecks.$inferSelect;
+
+export const competitors = sqliteTable("competitors", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull().references(() => users.id),
+  name: text("name").notNull(),
+  website: text("website"),
+  description: text("description"),
+  pricing: text("pricing"),
+  strengths: text("strengths"), // JSON array
+  weaknesses: text("weaknesses"), // JSON array
+  recentNews: text("recent_news"),
+  logoUrl: text("logo_url"),
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+  updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+export type Competitor = typeof competitors.$inferSelect;
+
+export const launchKits = sqliteTable("launch_kits", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull().references(() => users.id),
+  productName: text("product_name").notNull(),
+  description: text("description"),
+  phPost: text("ph_post"), // Product Hunt
+  hnPost: text("hn_post"), // Hacker News
+  twitterThread: text("twitter_thread"), // JSON array of tweets
+  linkedinPost: text("linkedin_post"),
+  emailBlast: text("email_blast"),
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+export type LaunchKit = typeof launchKits.$inferSelect;
+
+// ============================================================
+// INFLUENCER SUITE
+// ============================================================
+export const mediaKits = sqliteTable("media_kits", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull().references(() => users.id),
+  creatorName: text("creator_name").notNull(),
+  niche: text("niche"),
+  bio: text("bio"),
+  stats: text("stats"), // JSON {ig_followers, yt_subs, tiktok_followers, avg_views, engagement_rate}
+  rateCard: text("rate_card"), // JSON {ig_post, ig_story, ig_reel, yt_dedicated, yt_integration, tiktok_video}
+  pastBrands: text("past_brands"), // JSON array of brand names
+  testimonials: text("testimonials"), // JSON array
+  contactEmail: text("contact_email"),
+  kitUrl: text("kit_url"), // URL to rendered HTML kit
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+export type MediaKit = typeof mediaKits.$inferSelect;
+
+export const brandCollabs = sqliteTable("brand_collabs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull().references(() => users.id),
+  brandName: text("brand_name").notNull(),
+  brandLogo: text("brand_logo"),
+  contactName: text("contact_name"),
+  contactEmail: text("contact_email"),
+  stage: text("stage").notNull().default("pitched"), // pitched | negotiating | delivering | completed | paid
+  dealValue: integer("deal_value"), // in cents
+  currency: text("currency").default("USD"),
+  deliverables: text("deliverables"), // JSON array
+  deadline: text("deadline"),
+  notes: text("notes"),
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+  updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+export type BrandCollab = typeof brandCollabs.$inferSelect;
+
+export const contentCalendar = sqliteTable("content_calendar", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull().references(() => users.id),
+  date: text("date").notNull(), // YYYY-MM-DD
+  platform: text("platform").notNull(), // instagram | tiktok | youtube | twitter
+  contentType: text("content_type"), // reel | post | story | short | video
+  topic: text("topic"),
+  caption: text("caption"),
+  hook: text("hook"),
+  hashtags: text("hashtags"),
+  status: text("status").default("idea"), // idea | filming | editing | scheduled | published
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+export type ContentCalendarEntry = typeof contentCalendar.$inferSelect;

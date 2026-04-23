@@ -26,14 +26,14 @@ export function LanguageSwitcher({ compact = false }: { compact?: boolean }) {
           ) : (
             <>
               <span>{current?.name || langName}</span>
-              <span className="text-muted-foreground">\u00b7 {currency}</span>
+              <span className="text-muted-foreground">· {currency}</span>
             </>
           )}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-44">
         <div className="text-xs text-muted-foreground px-2 py-1.5 border-b mb-1">
-          Detected: {country} \u00b7 {currency}
+          Detected: {country} · {currency}
         </div>
         {AVAILABLE_LANGS.map((l) => (
           <DropdownMenuItem
