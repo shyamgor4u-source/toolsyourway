@@ -42,8 +42,8 @@ export default function TermsPage() {
         Welcome to ToolsYourWay. These Terms & Conditions (the <strong>"Terms"</strong>)
         govern your access to and use of the ToolsYourWay website, web application,
         APIs, AI features, and related services (collectively, the <strong>"Service"</strong>),
-        operated by <span className="placeholder">[Legal Entity Name]</span>, with
-        registered office at <span className="placeholder">[Registered Address]</span>
+        operated by Toolsyourway, with
+        registered office at Nisarg Palladium, Vadodara
         {" "}(<strong>"ToolsYourWay,"</strong> <strong>"we,"</strong> <strong>"us,"</strong> or <strong>"our"</strong>).
       </p>
       <p>
@@ -341,7 +341,7 @@ export default function TermsPage() {
         <p>
           These Terms are governed by the laws of India, without regard to conflict-of-laws
           principles. Subject to applicable mandatory consumer protections in your
-          jurisdiction, the courts at <span className="placeholder">[Jurisdiction City, State, India]</span>{" "}
+          jurisdiction, the courts at Vadodara, Gujarat, India{" "}
           will have exclusive jurisdiction over any dispute arising out of or relating
           to the Service or these Terms.
         </p>
@@ -358,10 +358,10 @@ export default function TermsPage() {
           For questions, notices, or requests regarding these Terms:
         </p>
         <ul>
-          <li><strong>Entity:</strong> <span className="placeholder">[Legal Entity Name]</span></li>
-          <li><strong>Address:</strong> <span className="placeholder">[Registered Address]</span></li>
+          <li><strong>Entity:</strong> Toolsyourway</li>
+          <li><strong>Address:</strong> Nisarg Palladium, Vadodara</li>
           <li><strong>Support / initial contact:</strong> <a href="mailto:admin@toolsyourway.com">admin@toolsyourway.com</a></li>
-          <li><strong>Grievance Officer (India):</strong> <span className="placeholder">[Grievance Officer Name]</span> &mdash; initial contact: <a href="mailto:admin@toolsyourway.com">admin@toolsyourway.com</a></li>
+          <li><strong>Grievance Officer (India):</strong> Shyam Gor &mdash; initial contact: <a href="mailto:admin@toolsyourway.com">admin@toolsyourway.com</a></li>
         </ul>
       </section>
 

@@ -61,10 +61,10 @@ export default function PrivacyPage() {
           policy is:
         </p>
         <ul>
-          <li><strong>Entity:</strong> <span className="placeholder">[Legal Entity Name]</span></li>
-          <li><strong>Registered address:</strong> <span className="placeholder">[Registered Address]</span></li>
+          <li><strong>Entity:</strong> Toolsyourway</li>
+          <li><strong>Registered address:</strong> Nisarg Palladium, Vadodara</li>
           <li><strong>Privacy contact / DPO:</strong> initial contact <a href="mailto:admin@toolsyourway.com">admin@toolsyourway.com</a></li>
-          <li><strong>India Grievance Officer (under the IT Rules and DPDP Act):</strong> <span className="placeholder">[Grievance Officer Name]</span> &mdash; initial contact: <a href="mailto:admin@toolsyourway.com">admin@toolsyourway.com</a></li>
+          <li><strong>India Grievance Officer (under the IT Rules and DPDP Act):</strong> Shyam Gor &mdash; initial contact: <a href="mailto:admin@toolsyourway.com">admin@toolsyourway.com</a></li>
         </ul>
         <p>
           When you use the Service to process personal data of your own contacts,
@@ -357,8 +357,8 @@ export default function PrivacyPage() {
         <ul>
           <li><strong>Privacy contact / DPO:</strong> initial contact <a href="mailto:admin@toolsyourway.com">admin@toolsyourway.com</a></li>
           <li><strong>Support / initial contact:</strong> <a href="mailto:admin@toolsyourway.com">admin@toolsyourway.com</a></li>
-          <li><strong>India Grievance Officer:</strong> <span className="placeholder">[Grievance Officer Name]</span> &mdash; initial contact: <a href="mailto:admin@toolsyourway.com">admin@toolsyourway.com</a></li>
-          <li><strong>Postal:</strong> <span className="placeholder">[Registered Address]</span></li>
+          <li><strong>India Grievance Officer:</strong> Shyam Gor &mdash; initial contact: <a href="mailto:admin@toolsyourway.com">admin@toolsyourway.com</a></li>
+          <li><strong>Postal:</strong> Nisarg Palladium, Vadodara</li>
         </ul>
         <p>
           We aim to acknowledge requests within 7 days and resolve them within the
