@@ -8,6 +8,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
+import SignupLegalText from "@/components/legal/SignupLegalText";
+import LegalFooterLinks from "@/components/legal/LegalFooterLinks";
 import {
   Bot,
   Zap,
@@ -596,7 +598,16 @@ export default function PricingPage() {
               {loadingPlan === "xendit" ? "Redirecting…" : "🌏 Xendit (SEA)"}
             </Button>
           </div>
+          <SignupLegalText action="subscribing" className="mt-4 text-center" />
         </div>
+        <footer className="border-t border-border/60 mt-12 py-6">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">
+              &copy; {new Date().getFullYear()} ToolsYourWay. All rights reserved.
+            </p>
+            <LegalFooterLinks />
+          </div>
+        </footer>
       </div>
     </div>
   );

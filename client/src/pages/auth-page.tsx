@@ -10,6 +10,8 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { Bot, Chrome, Mail, Building, Sparkles } from "lucide-react";
+import SignupLegalText from "@/components/legal/SignupLegalText";
+import LegalFooterLinks from "@/components/legal/LegalFooterLinks";
 
 export default function AuthPage() {
   const { user, isLoading: authLoading, login, register } = useAuth();
@@ -217,6 +219,7 @@ export default function AuthPage() {
                     <Button type="submit" className="w-full" disabled={submitting} data-testid="button-register">
                       {submitting ? "Creating account…" : "Create account"}
                     </Button>
+                    <SignupLegalText action="creating your account" className="mt-3 text-center" />
                   </form>
                 </TabsContent>
               </Tabs>
@@ -264,6 +267,9 @@ export default function AuthPage() {
               </p>
             </CardContent>
           </Card>
+          <div className="mt-6 flex justify-center">
+            <LegalFooterLinks />
+          </div>
         </div>
       </div>
 

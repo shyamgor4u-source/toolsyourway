@@ -21,6 +21,8 @@ const PricingPage = lazy(() => import("@/pages/pricing-page"));
 const OutreachPage = lazy(() => import("@/pages/outreach-page"));
 const FoundersPage = lazy(() => import("@/pages/founders-page"));
 const InfluencersPage = lazy(() => import("@/pages/influencers-page"));
+const TermsPage = lazy(() => import("@/pages/terms"));
+const PrivacyPage = lazy(() => import("@/pages/privacy"));
 
 function PageSpinner() {
   return (
@@ -83,6 +85,16 @@ function AppRouter() {
       </Route>
       <Route path="/influencers">
         <ProtectedRoute component={InfluencersPage} />
+      </Route>
+      <Route path="/terms">
+        <Suspense fallback={<PageSpinner />}>
+          <TermsPage />
+        </Suspense>
+      </Route>
+      <Route path="/privacy">
+        <Suspense fallback={<PageSpinner />}>
+          <PrivacyPage />
+        </Suspense>
       </Route>
       <Route component={NotFound} />
     </Switch>

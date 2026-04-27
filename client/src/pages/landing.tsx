@@ -5,6 +5,7 @@ import { LanguageSwitcher } from "@/components/language-switcher";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import LegalFooterLinks from "@/components/legal/LegalFooterLinks";
 import {
   Bot, Megaphone, Database, Mail, TrendingUp, Users,
   Check, ArrowRight, Zap, Globe, Clock, BarChart3,
@@ -251,6 +252,7 @@ export default function LandingPage() {
             <Bot className="h-5 w-5 text-primary" />
             <span className="text-sm font-semibold text-primary">ToolsYourWay</span>
           </div>
+          <LegalFooterLinks />
           <p className="text-xs text-muted-foreground">&copy; {new Date().getFullYear()} ToolsYourWay. All rights reserved.</p>
         </div>
       </footer>

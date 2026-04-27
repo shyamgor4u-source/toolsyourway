@@ -1,0 +1,110 @@
+/* Long-form, readable typography for legal pages.
+ * Pair with LegalPageLayout. Keep colors aligned with the
+ * royal indigo / warm gold / warm white palette. */
+
+.legal-prose {
+  font-size: 1rem;
+  line-height: 1.7;
+  color: #2A2161;
+}
+
+.dark .legal-prose {
+  color: #E5DFFA;
+}
+
+.legal-prose h2 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-top: 2.25rem;
+  margin-bottom: 0.75rem;
+  color: #1E1650;
+  scroll-margin-top: 6rem;
+  letter-spacing: -0.01em;
+}
+
+.dark .legal-prose h2 {
+  color: #F5F2FF;
+}
+
+.legal-prose h3 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+  color: #1E1650;
+}
+
+.dark .legal-prose h3 {
+  color: #F5F2FF;
+}
+
+.legal-prose p {
+  margin-bottom: 1rem;
+}
+
+.legal-prose ul,
+.legal-prose ol {
+  margin: 0.5rem 0 1rem 1.25rem;
+  padding-left: 0.75rem;
+}
+
+.legal-prose ul {
+  list-style: disc;
+}
+
+.legal-prose ol {
+  list-style: decimal;
+}
+
+.legal-prose li {
+  margin-bottom: 0.4rem;
+}
+
+.legal-prose a {
+  color: #C98A1A;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.legal-prose a:hover {
+  color: #A8710F;
+}
+
+.legal-prose strong {
+  color: #1E1650;
+  font-weight: 600;
+}
+
+.dark .legal-prose strong {
+  color: #F5F2FF;
+}
+
+.legal-prose code,
+.legal-prose .placeholder {
+  background: #FBF6E6;
+  color: #6E4A05;
+  padding: 0.05rem 0.35rem;
+  border-radius: 4px;
+  font-size: 0.9em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.dark .legal-prose code,
+.dark .legal-prose .placeholder {
+  background: #3D2F73;
+  color: #F0D78A;
+}
+
+.legal-prose hr {
+  border: 0;
+  border-top: 1px solid #E8E3F5;
+  margin: 2rem 0;
+}
+
+.dark .legal-prose hr {
+  border-top-color: #241B4A;
+}
+
+.legal-prose section {
+  scroll-margin-top: 6rem;
+}
