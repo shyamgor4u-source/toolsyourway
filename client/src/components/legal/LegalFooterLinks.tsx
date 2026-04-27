@@ -16,7 +16,7 @@ export default function LegalFooterLinks({ className = "" }: LegalFooterLinksPro
       <Link href="/privacy" className="hover:text-primary transition">
         Privacy
       </Link>
-      <a href="mailto:support@toolsyourway.com" className="hover:text-primary transition">
+      <a href="mailto:admin@toolsyourway.com" className="hover:text-primary transition">
         Contact
       </a>
     </nav>

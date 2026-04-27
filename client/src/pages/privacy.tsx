@@ -63,8 +63,8 @@ export default function PrivacyPage() {
         <ul>
           <li><strong>Entity:</strong> <span className="placeholder">[Legal Entity Name]</span></li>
           <li><strong>Registered address:</strong> <span className="placeholder">[Registered Address]</span></li>
-          <li><strong>Privacy contact / DPO:</strong> <span className="placeholder">[DPO/Privacy Contact Email]</span></li>
-          <li><strong>India Grievance Officer (under the IT Rules and DPDP Act):</strong> <span className="placeholder">[Grievance Officer Name]</span>, <span className="placeholder">[Grievance Officer Email]</span></li>
+          <li><strong>Privacy contact / DPO:</strong> initial contact <a href="mailto:admin@toolsyourway.com">admin@toolsyourway.com</a></li>
+          <li><strong>India Grievance Officer (under the IT Rules and DPDP Act):</strong> <span className="placeholder">[Grievance Officer Name]</span> &mdash; initial contact: <a href="mailto:admin@toolsyourway.com">admin@toolsyourway.com</a></li>
         </ul>
         <p>
           When you use the Service to process personal data of your own contacts,
@@ -205,7 +205,7 @@ export default function PrivacyPage() {
         </ul>
         <p>
           A current list of subprocessors is available on request from{" "}
-          <span className="placeholder">[DPO/Privacy Contact Email]</span>. We bind
+          <a href="mailto:admin@toolsyourway.com">admin@toolsyourway.com</a>. We bind
           subprocessors to confidentiality and data-protection obligations consistent
           with applicable law.
         </p>
@@ -255,7 +255,7 @@ export default function PrivacyPage() {
           The Service is not directed to children under 18 and is not intended for them.
           We do not knowingly collect personal data from children. If you believe a
           child has provided us with personal data, please contact us at{" "}
-          <span className="placeholder">[DPO/Privacy Contact Email]</span> and we will
+          <a href="mailto:admin@toolsyourway.com">admin@toolsyourway.com</a> and we will
           take appropriate steps to delete it.
         </p>
       </section>
@@ -299,7 +299,7 @@ export default function PrivacyPage() {
         </ul>
         <p>
           You may submit requests via{" "}
-          <span className="placeholder">[DPO/Privacy Contact Email]</span>. Authorized
+          <a href="mailto:admin@toolsyourway.com">admin@toolsyourway.com</a>. Authorized
           agents may submit requests on your behalf with verifiable authorization.
         </p>
       </section>
@@ -319,7 +319,7 @@ export default function PrivacyPage() {
         <p>
           You can delete data and close your account at any time from within the
           Service or by writing to{" "}
-          <span className="placeholder">[DPO/Privacy Contact Email]</span>. After
+          <a href="mailto:admin@toolsyourway.com">admin@toolsyourway.com</a>. After
           account closure:
         </p>
         <ul>
@@ -355,9 +355,9 @@ export default function PrivacyPage() {
           For privacy questions, requests, or complaints:
         </p>
         <ul>
-          <li><strong>Privacy contact / DPO:</strong> <span className="placeholder">[DPO/Privacy Contact Email]</span></li>
-          <li><strong>Support:</strong> <a href="mailto:support@toolsyourway.com">support@toolsyourway.com</a></li>
-          <li><strong>India Grievance Officer:</strong> <span className="placeholder">[Grievance Officer Name]</span>, <span className="placeholder">[Grievance Officer Email]</span></li>
+          <li><strong>Privacy contact / DPO:</strong> initial contact <a href="mailto:admin@toolsyourway.com">admin@toolsyourway.com</a></li>
+          <li><strong>Support / initial contact:</strong> <a href="mailto:admin@toolsyourway.com">admin@toolsyourway.com</a></li>
+          <li><strong>India Grievance Officer:</strong> <span className="placeholder">[Grievance Officer Name]</span> &mdash; initial contact: <a href="mailto:admin@toolsyourway.com">admin@toolsyourway.com</a></li>
           <li><strong>Postal:</strong> <span className="placeholder">[Registered Address]</span></li>
         </ul>
         <p>

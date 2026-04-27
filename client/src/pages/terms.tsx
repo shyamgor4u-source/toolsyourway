@@ -75,7 +75,7 @@ export default function TermsPage() {
           <li>You must be at least 18 years old, or the age of majority in your jurisdiction, to use the Service.</li>
           <li>You agree to provide accurate, complete, and current information during signup and to keep it updated.</li>
           <li>You are responsible for safeguarding your credentials, including OAuth tokens for connected accounts, and for all activity under your account.</li>
-          <li>You must notify us promptly at <a href="mailto:support@toolsyourway.com">support@toolsyourway.com</a> of any unauthorized access or security incident affecting your account.</li>
+          <li>You must notify us promptly at <a href="mailto:admin@toolsyourway.com">admin@toolsyourway.com</a> of any unauthorized access or security incident affecting your account.</li>
           <li>One account per individual or organization, unless we agree otherwise in writing.</li>
         </ul>
       </section>
@@ -360,8 +360,8 @@ export default function TermsPage() {
         <ul>
           <li><strong>Entity:</strong> <span className="placeholder">[Legal Entity Name]</span></li>
           <li><strong>Address:</strong> <span className="placeholder">[Registered Address]</span></li>
-          <li><strong>Support:</strong> <a href="mailto:support@toolsyourway.com">support@toolsyourway.com</a></li>
-          <li><strong>Grievance Officer (India):</strong> <span className="placeholder">[Grievance Officer Name]</span>, <span className="placeholder">[Grievance Officer Email]</span></li>
+          <li><strong>Support / initial contact:</strong> <a href="mailto:admin@toolsyourway.com">admin@toolsyourway.com</a></li>
+          <li><strong>Grievance Officer (India):</strong> <span className="placeholder">[Grievance Officer Name]</span> &mdash; initial contact: <a href="mailto:admin@toolsyourway.com">admin@toolsyourway.com</a></li>
         </ul>
       </section>
 

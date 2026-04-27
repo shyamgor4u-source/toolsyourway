@@ -97,7 +97,7 @@ export default function LegalPageLayout({
           <div className="flex gap-5">
             <Link href="/terms" className="hover:text-[#C98A1A] transition">Terms</Link>
             <Link href="/privacy" className="hover:text-[#C98A1A] transition">Privacy</Link>
-            <a href="mailto:support@toolsyourway.com" className="hover:text-[#C98A1A] transition">
+            <a href="mailto:admin@toolsyourway.com" className="hover:text-[#C98A1A] transition">
               Contact
             </a>
           </div>
