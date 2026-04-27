@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { TrialBanner } from "@/components/trial-banner";
+import { LinkedInTestPost } from "@/components/linkedin-test-post";
 import {
   Linkedin, Instagram, Youtube, Twitter, Mail,
   Upload, Search, Sparkles, Send, Users, Plus, Trash2, ArrowLeft,
@@ -235,6 +236,9 @@ export default function OutreachPage() {
 // CONNECTED ACCOUNTS STRIP
 // ============================================================
 function ConnectedAccountsStrip({ connections }: { connections: any[] }) {
+  const [linkedinTestOpen, setLinkedinTestOpen] = useState(false);
+  const linkedinConn = connections.find((c: any) => c.platform === "linkedin" && c.status === "connected" && c.accessToken);
+
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -245,11 +249,13 @@ function ConnectedAccountsStrip({ connections }: { connections: any[] }) {
           {PLATFORMS.map((p) => {
             const conn = connections.find((c: any) => c.platform === p.key);
             const Icon = p.icon;
+            const isConnected = !!conn;
+            const canPost = p.key === "linkedin" && isConnected && !!conn?.accessToken;
             return (
               <div
                 key={p.key}
-                className={`flex-shrink-0 flex items-center gap-2 px-3 py-2 rounded-lg border min-w-[160px] ${
-                  conn ? "border-green-200 bg-green-50/40" : "border-border/60 bg-muted/30"
+                className={`flex-shrink-0 flex items-center gap-2 px-3 py-2 rounded-lg border min-w-[180px] ${
+                  isConnected ? "border-green-200 bg-green-50/40" : "border-border/60 bg-muted/30"
                 }`}
                 data-testid={`strip-${p.key}`}
               >
@@ -262,12 +268,23 @@ function ConnectedAccountsStrip({ connections }: { connections: any[] }) {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-semibold truncate">{p.label}</div>
-                  {conn ? (
+                  {isConnected ? (
                     <div className="text-[10px] text-green-700 truncate">{conn.displayName || conn.accountName || "Connected"}</div>
                   ) : (
                     <div className="text-[10px] text-muted-foreground">Not connected</div>
                   )}
                 </div>
+                {canPost && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 px-2 text-[10px] text-[#0A66C2] hover:bg-[#0A66C2]/10"
+                    onClick={() => setLinkedinTestOpen(true)}
+                    data-testid="button-test-linkedin-post"
+                  >
+                    Post
+                  </Button>
+                )}
               </div>
             );
           })}
@@ -276,6 +293,14 @@ function ConnectedAccountsStrip({ connections }: { connections: any[] }) {
           Connect accounts from any Bot → Actions tab. Outreach uses your authenticated session — rate-limited to stay compliant with each platform's ToS.
         </div>
       </CardContent>
+
+      {linkedinConn && (
+        <LinkedInTestPost
+          open={linkedinTestOpen}
+          onClose={() => setLinkedinTestOpen(false)}
+          connection={linkedinConn}
+        />
+      )}
     </Card>
   );
 }

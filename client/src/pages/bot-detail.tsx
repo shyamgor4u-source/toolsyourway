@@ -546,11 +546,27 @@ export default function BotDetailPage() {
     },
     onSuccess: (data) => {
       if (data.redirect) {
-        // Real OAuth — open in popup window
+        // Real OAuth — open in popup window + listen for postMessage from callback
         const popup = window.open(data.redirect, "socialAuth", "width=600,height=700,left=200,top=100");
+
+        const messageHandler = (evt: MessageEvent) => {
+          if (evt.data?.type === "linkedin-oauth" || evt.data?.type === "oauth-complete") {
+            window.removeEventListener("message", messageHandler);
+            queryClient.invalidateQueries({ queryKey: ["/api/social/connections"] });
+            setConnectPopupOpen(false);
+            if (evt.data.success) {
+              toast({ title: "Connected", description: "Account linked successfully." });
+            } else {
+              toast({ title: "Connection failed", description: "Please try again.", variant: "destructive" });
+            }
+          }
+        };
+        window.addEventListener("message", messageHandler);
+
         const timer = setInterval(() => {
           if (popup?.closed) {
             clearInterval(timer);
+            window.removeEventListener("message", messageHandler);
             queryClient.invalidateQueries({ queryKey: ["/api/social/connections"] });
             setConnectPopupOpen(false);
           }

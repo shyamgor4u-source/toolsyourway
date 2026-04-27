@@ -1110,11 +1110,16 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
       }
 
       // Check if real OAuth is configured for this platform
+      // LinkedIn state carries userId so popup callback can attach to the right account
+      const linkedinState = process.env.LINKEDIN_CLIENT_ID
+        ? Buffer.from(`${req.user!.id}:${Date.now()}:${Math.random().toString(36).slice(2)}`).toString("base64")
+        : undefined;
+      const linkedinRedirect = `${process.env.BASE_URL || "http://localhost:5000"}/api/social/linkedin/callback`;
       const oauthConfig: Record<string, { clientId?: string; authUrl?: string }> = {
         linkedin: {
           clientId: process.env.LINKEDIN_CLIENT_ID,
           authUrl: process.env.LINKEDIN_CLIENT_ID
-            ? `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${process.env.LINKEDIN_CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.BASE_URL || "http://localhost:5000")}/api/social/linkedin/callback&scope=openid%20profile%20w_member_social`
+            ? `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${process.env.LINKEDIN_CLIENT_ID}&redirect_uri=${encodeURIComponent(linkedinRedirect)}&scope=${encodeURIComponent("openid profile w_member_social email")}&state=${linkedinState}`
             : undefined,
         },
         facebook: {
@@ -1180,6 +1185,116 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
       console.error("Social connect error:", err);
       res.status(500).json({ message: err.message || "Connection failed" });
     }
+  });
+
+  // ============================================================
+  // LINKEDIN OAUTH CALLBACK — real token exchange + profile fetch
+  // ============================================================
+  app.get("/api/social/linkedin/callback", async (req: Request, res: Response) => {
+    try {
+      const { code, state, error, error_description } = req.query as any;
+
+      // Helper that returns HTML that auto-closes the popup and notifies the parent window
+      const renderPopupResult = (success: boolean, msg: string) => `<!doctype html><html><head><meta charset="utf-8"><title>LinkedIn</title>
+<style>body{font-family:-apple-system,Inter,sans-serif;background:#FDFCF8;color:#1E1650;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center;padding:20px}
+.card{max-width:400px;background:white;padding:40px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,0.08)}
+.icon{width:56px;height:56px;border-radius:50%;margin:0 auto 16px;display:flex;align-items:center;justify-content:center;font-size:28px}
+.ok{background:#D1FAE5;color:#065F46}
+.err{background:#FEE2E2;color:#991B1B}
+h1{font-size:18px;margin:0 0 8px}
+p{color:#666;font-size:14px;margin:0}
+</style></head><body><div class="card">
+<div class="icon ${success ? "ok" : "err"}">${success ? "\u2713" : "\u2717"}</div>
+<h1>${success ? "LinkedIn Connected" : "Connection Failed"}</h1><p>${msg}</p><p style="margin-top:16px;font-size:12px">You can close this window.</p>
+</div><script>setTimeout(() => { if (window.opener) { window.opener.postMessage({ type:"linkedin-oauth", success:${success} }, "*"); } window.close(); }, 1500);</script></body></html>`;
+
+      if (error) {
+        console.warn("LinkedIn OAuth denied:", error, error_description);
+        return res.type("html").send(renderPopupResult(false, error_description || error));
+      }
+      if (!code) {
+        return res.type("html").send(renderPopupResult(false, "No authorization code received"));
+      }
+
+      // State should encode userId so we can attach the connection to the right user (session may not survive popup)
+      // Format: base64(userId:nonce)
+      let userId: number | undefined;
+      try {
+        const decoded = Buffer.from(String(state), "base64").toString("utf-8");
+        userId = parseInt(decoded.split(":")[0], 10);
+      } catch {}
+      if (!userId && req.isAuthenticated()) userId = req.user!.id;
+      if (!userId) {
+        return res.type("html").send(renderPopupResult(false, "Session expired \u2014 please try again"));
+      }
+
+      // Exchange code for access token
+      const redirectUri = `${process.env.BASE_URL || "http://localhost:5000"}/api/social/linkedin/callback`;
+      const tokenRes = await fetch("https://www.linkedin.com/oauth/v2/accessToken", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code: String(code),
+          redirect_uri: redirectUri,
+          client_id: process.env.LINKEDIN_CLIENT_ID!,
+          client_secret: process.env.LINKEDIN_CLIENT_SECRET!,
+        }).toString(),
+      });
+
+      if (!tokenRes.ok) {
+        const errText = await tokenRes.text();
+        console.error("LinkedIn token exchange failed:", errText);
+        return res.type("html").send(renderPopupResult(false, "Token exchange failed \u2014 check app credentials"));
+      }
+
+      const tokenData: any = await tokenRes.json();
+      const accessToken: string = tokenData.access_token;
+      const refreshToken: string | undefined = tokenData.refresh_token;
+      const expiresIn: number = tokenData.expires_in || 5184000; // 60 days default
+
+      // Fetch user profile (requires openid + profile scopes)
+      const profileRes = await fetch("https://api.linkedin.com/v2/userinfo", {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!profileRes.ok) {
+        const errText = await profileRes.text();
+        console.error("LinkedIn profile fetch failed:", errText);
+        return res.type("html").send(renderPopupResult(false, "Profile fetch failed"));
+      }
+      const profile: any = await profileRes.json();
+
+      // Store connection with real token and real profile pic
+      await storage.connectSocial({
+        userId,
+        platform: "linkedin",
+        accountId: profile.sub,
+        accountName: profile.name,
+        displayName: profile.name,
+        profilePictureUrl: profile.picture || null,
+        profileUrl: `https://www.linkedin.com/in/${profile.sub}`,
+        accountType: "profile",
+        accessToken,
+        refreshToken: refreshToken || null,
+        expiresAt: new Date(Date.now() + expiresIn * 1000).toISOString(),
+      });
+
+      res.type("html").send(renderPopupResult(true, `Welcome, ${profile.name}. You can now post to LinkedIn from ToolsYourWay.`));
+    } catch (e: any) {
+      console.error("LinkedIn callback error:", e);
+      res.type("html").send(`<!doctype html><html><body><p>Error: ${e.message}</p><script>window.close();</script></body></html>`);
+    }
+  });
+
+  // Initiate LinkedIn OAuth (returns auth URL with encoded state containing userId)
+  app.post("/api/social/linkedin/oauth-start", requireAuth, (req: Request, res: Response) => {
+    if (!process.env.LINKEDIN_CLIENT_ID) {
+      return res.status(400).json({ message: "LINKEDIN_CLIENT_ID not configured", configured: false });
+    }
+    const state = Buffer.from(`${req.user!.id}:${Date.now()}:${Math.random().toString(36).slice(2)}`).toString("base64");
+    const redirectUri = `${process.env.BASE_URL || "http://localhost:5000"}/api/social/linkedin/callback`;
+    const authUrl = `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${process.env.LINKEDIN_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent("openid profile w_member_social email")}&state=${state}`;
+    res.json({ authUrl, state, configured: true });
   });
 
   // Select which page to post to (LinkedIn Company Page / Facebook Page / Personal Profile)
