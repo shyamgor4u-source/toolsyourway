@@ -1115,7 +1115,7 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
         ? Buffer.from(`${req.user!.id}:${Date.now()}:${Math.random().toString(36).slice(2)}`).toString("base64")
         : undefined;
       const linkedinRedirect = `${process.env.BASE_URL || "http://localhost:5000"}/api/social/linkedin/callback`;
-      const oauthConfig: Record<string, { clientId?: string; authUrl?: string }> = {
+      const oauthConfig: Record<string, { clientId?: string; authUrl?: string; oauthStart?: string }> = {
         linkedin: {
           clientId: process.env.LINKEDIN_CLIENT_ID,
           authUrl: process.env.LINKEDIN_CLIENT_ID
@@ -1130,10 +1130,17 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
         },
         twitter: {
           clientId: process.env.TWITTER_CLIENT_ID,
-          authUrl: undefined, // Twitter OAuth 2.0 PKCE flow — more complex
+          oauthStart: process.env.TWITTER_CLIENT_ID ? "/api/social/twitter/oauth-start" : undefined,
         },
-        instagram: { clientId: process.env.FACEBOOK_APP_ID, authUrl: undefined }, // Uses Facebook Graph API
-        youtube: { clientId: process.env.GOOGLE_CLIENT_ID, authUrl: undefined }, // Uses Google/YouTube Data API
+        instagram: {
+          clientId: process.env.FACEBOOK_APP_ID,
+          // Instagram is connected via Facebook OAuth (Graph API)
+          oauthStart: process.env.FACEBOOK_APP_ID ? "/api/social/facebook/oauth-start" : undefined,
+        },
+        youtube: {
+          clientId: process.env.GOOGLE_CLIENT_ID,
+          oauthStart: process.env.GOOGLE_CLIENT_ID ? "/api/social/youtube/oauth-start" : undefined,
+        },
         tiktok: { clientId: process.env.TIKTOK_CLIENT_KEY, authUrl: undefined },
       };
 
@@ -1142,6 +1149,11 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
       // If real OAuth is configured, return the auth URL for redirect
       if (config?.authUrl) {
         return res.json({ redirect: config.authUrl });
+      }
+      // For PKCE platforms (Twitter) and platforms needing dynamic state (Google/YouTube, Facebook/Instagram),
+      // tell the frontend to call the oauth-start endpoint to get the auth URL.
+      if (config?.oauthStart) {
+        return res.json({ usePkce: true, oauthStartUrl: config.oauthStart });
       }
 
       // ADMIN ACCOUNTS: require real OAuth — no demo connects
@@ -2033,6 +2045,10 @@ p{color:#666;font-size:14px;margin:0}
   // Register Founder + Influencer + Publishing routes
   const { registerFounderInfluencerRoutes } = await import("./founder-influencer-routes");
   registerFounderInfluencerRoutes(app, requireAuth, requireActiveAccess);
+
+  // Register OAuth routes (YouTube, Twitter, Facebook/Instagram)
+  const { registerOAuthRoutes } = await import("./oauth-routes");
+  registerOAuthRoutes(app, requireAuth);
 
   // ============================================================
   // OUTREACH HUB

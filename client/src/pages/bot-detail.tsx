@@ -542,7 +542,14 @@ export default function BotDetailPage() {
   const connectSocial = useMutation({
     mutationFn: async (platform: string) => {
       const res = await apiRequest("POST", "/api/social/connect", { platform });
-      return res.json();
+      const data = await res.json();
+      // For PKCE platforms (Twitter/X) and Google/YouTube, fetch the auth URL from oauth-start
+      if (data.usePkce && data.oauthStartUrl) {
+        const startRes = await apiRequest("POST", data.oauthStartUrl);
+        const startData = await startRes.json();
+        if (startData.authUrl) return { ...data, redirect: startData.authUrl };
+      }
+      return data;
     },
     onSuccess: (data) => {
       if (data.redirect) {
