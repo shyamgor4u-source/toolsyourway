@@ -9,10 +9,21 @@ After setup, your users can connect their social accounts via OAuth and ToolsYou
 ## Prerequisites
 
 You need:
-- Production domain set up: `https://toolsyourway.com`
+- Production domain set up: `https://www.toolsyourway.com`
 - Render env vars dashboard access
-- Privacy Policy URL: `https://toolsyourway.com/#/privacy` (already live)
-- Terms of Use URL: `https://toolsyourway.com/#/terms` (already live)
+- Privacy Policy URL: `https://www.toolsyourway.com/#/privacy` (already live)
+- Terms of Use URL: `https://www.toolsyourway.com/#/terms` (already live)
+
+### Required: `BASE_URL`
+
+All OAuth callback URLs are built on top of `BASE_URL`. In Render, set:
+
+```
+BASE_URL=https://www.toolsyourway.com
+```
+
+If `BASE_URL` is missing in production, callbacks fall back to
+`http://localhost:5000`, which every OAuth provider will reject.
 
 ---
 
@@ -43,7 +54,7 @@ On the **Products** tab, request:
 ```
 LINKEDIN_CLIENT_ID=86abc...
 LINKEDIN_CLIENT_SECRET=WPL_AP...
-BASE_URL=https://toolsyourway.com
+BASE_URL=https://www.toolsyourway.com
 ```
 
 ---

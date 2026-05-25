@@ -151,6 +151,26 @@ export default function PricingPage() {
     },
     onSuccess: (data: { orderId: string; amount: number; currency: string; key: string }) => {
       if (!user) return;
+      // Guard: never open Checkout without a publishable key. Passing
+      // key:undefined causes Razorpay to fetch checkout-static-next/build/undefined.
+      if (!data.key || !data.orderId) {
+        toast({
+          title: "Razorpay not configured",
+          description: "Indian payments are temporarily unavailable. Please use Stripe or PayPal, or contact support.",
+          variant: "destructive",
+        });
+        setLoadingPlan(null);
+        return;
+      }
+      if (typeof (window as any).Razorpay !== "function") {
+        toast({
+          title: "Checkout script not loaded",
+          description: "Refresh the page and try again, or use Stripe / PayPal.",
+          variant: "destructive",
+        });
+        setLoadingPlan(null);
+        return;
+      }
       const options = {
         key: data.key,
         amount: data.amount,

@@ -14,6 +14,7 @@ import Replicate from "replicate";
 import { storage, dbReady } from "./storage";
 import { registerSchema, loginSchema } from "@shared/schema";
 import { setupAuth } from "./auth";
+import { getBaseUrl } from "./config";
 
 const MemoryStore = createMemoryStore(session);
 
@@ -508,8 +509,8 @@ export async function registerRoutes(server: Server, app: Express) {
           quantity: 1,
         }],
         metadata: { userId: String(req.user!.id), pack, credits: String(p.credits), type: "credits" },
-        success_url: `${process.env.BASE_URL || "http://localhost:5000"}/#/dashboard?credits=success`,
-        cancel_url: `${process.env.BASE_URL || "http://localhost:5000"}/#/dashboard?credits=cancelled`,
+        success_url: `${getBaseUrl(req)}/#/dashboard?credits=success`,
+        cancel_url: `${getBaseUrl(req)}/#/dashboard?credits=cancelled`,
       });
       // Record pending purchase
       await storage.createCreditPurchase({
@@ -529,7 +530,7 @@ export async function registerRoutes(server: Server, app: Express) {
       const p = CREDIT_PACKS[pack];
       if (!p) return res.status(400).json({ message: "Invalid pack" });
       if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET)
-        return res.status(500).json({ message: "Razorpay not configured" });
+        return res.status(503).json({ message: "Razorpay is not configured. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in your environment." });
       const rp = new Razorpay({ key_id: process.env.RAZORPAY_KEY_ID, key_secret: process.env.RAZORPAY_KEY_SECRET });
       // Convert USD cents to INR paise approximately (1 USD \u2248 83 INR)
       const amountInr = p.amount * 83;
@@ -1114,7 +1115,7 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
       const linkedinState = process.env.LINKEDIN_CLIENT_ID
         ? Buffer.from(`${req.user!.id}:${Date.now()}:${Math.random().toString(36).slice(2)}`).toString("base64")
         : undefined;
-      const linkedinRedirect = `${process.env.BASE_URL || "http://localhost:5000"}/api/social/linkedin/callback`;
+      const linkedinRedirect = `${getBaseUrl(req)}/api/social/linkedin/callback`;
       const oauthConfig: Record<string, { clientId?: string; authUrl?: string; oauthStart?: string }> = {
         linkedin: {
           clientId: process.env.LINKEDIN_CLIENT_ID,
@@ -1125,7 +1126,7 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
         facebook: {
           clientId: process.env.FACEBOOK_APP_ID,
           authUrl: process.env.FACEBOOK_APP_ID
-            ? `https://www.facebook.com/v18.0/dialog/oauth?client_id=${process.env.FACEBOOK_APP_ID}&redirect_uri=${encodeURIComponent(process.env.BASE_URL || "http://localhost:5000")}/api/social/facebook/callback&scope=pages_manage_posts,pages_read_engagement`
+            ? `https://www.facebook.com/v18.0/dialog/oauth?client_id=${process.env.FACEBOOK_APP_ID}&redirect_uri=${encodeURIComponent(getBaseUrl(req))}/api/social/facebook/callback&scope=pages_manage_posts,pages_read_engagement`
             : undefined,
         },
         twitter: {
@@ -1241,7 +1242,7 @@ p{color:#666;font-size:14px;margin:0}
       }
 
       // Exchange code for access token
-      const redirectUri = `${process.env.BASE_URL || "http://localhost:5000"}/api/social/linkedin/callback`;
+      const redirectUri = `${getBaseUrl(req)}/api/social/linkedin/callback`;
       const tokenRes = await fetch("https://www.linkedin.com/oauth/v2/accessToken", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -1304,7 +1305,7 @@ p{color:#666;font-size:14px;margin:0}
       return res.status(400).json({ message: "LINKEDIN_CLIENT_ID not configured", configured: false });
     }
     const state = Buffer.from(`${req.user!.id}:${Date.now()}:${Math.random().toString(36).slice(2)}`).toString("base64");
-    const redirectUri = `${process.env.BASE_URL || "http://localhost:5000"}/api/social/linkedin/callback`;
+    const redirectUri = `${getBaseUrl(req)}/api/social/linkedin/callback`;
     const authUrl = `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${process.env.LINKEDIN_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent("openid profile w_member_social email")}&state=${state}`;
     res.json({ authUrl, state, configured: true });
   });
@@ -1498,7 +1499,7 @@ p{color:#666;font-size:14px;margin:0}
 
       const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
       const user = req.user!;
-      const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get("host")}`;
+      const baseUrl = getBaseUrl(req);
 
       const session = await stripe.checkout.sessions.create({
         mode: "subscription",
@@ -1746,8 +1747,8 @@ p{color:#666;font-size:14px;margin:0}
             description: `ToolsYourWay - ${selectedBots.length} bots`,
           }],
           application_context: {
-            return_url: `${process.env.BASE_URL || "http://localhost:5000"}/#/dashboard?payment=success`,
-            cancel_url: `${process.env.BASE_URL || "http://localhost:5000"}/#/pricing`,
+            return_url: `${getBaseUrl(req)}/#/dashboard?payment=success`,
+            cancel_url: `${getBaseUrl(req)}/#/pricing`,
           },
         }),
       });
@@ -1788,7 +1789,7 @@ p{color:#666;font-size:14px;margin:0}
           currency: "USD",
           customer: { first_name: req.user!.name, email: req.user!.email },
           source: { id: "src_all" },
-          redirect: { url: `${process.env.BASE_URL || "http://localhost:5000"}/api/payments/tap/callback?userId=${req.user!.id}&bots=${selectedBots.join(",")}` },
+          redirect: { url: `${getBaseUrl(req)}/api/payments/tap/callback?userId=${req.user!.id}&bots=${selectedBots.join(",")}` },
           description: `ToolsYourWay - ${selectedBots.length} bots`,
           metadata: {
             userId: req.user!.id,
@@ -1837,8 +1838,8 @@ p{color:#666;font-size:14px;margin:0}
           currency: "USD",
           description: `ToolsYourWay - ${selectedBots.length} bots`,
           customer: { given_names: req.user!.name, email: req.user!.email },
-          success_redirect_url: `${process.env.BASE_URL || "http://localhost:5000"}/#/dashboard?payment=success`,
-          failure_redirect_url: `${process.env.BASE_URL || "http://localhost:5000"}/#/pricing`,
+          success_redirect_url: `${getBaseUrl(req)}/#/dashboard?payment=success`,
+          failure_redirect_url: `${getBaseUrl(req)}/#/pricing`,
         }),
       });
       const invoice = await invoiceRes.json() as { invoice_url?: string };

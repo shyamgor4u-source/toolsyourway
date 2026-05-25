@@ -5,6 +5,7 @@
 import type { Express, Request, Response } from "express";
 import crypto from "crypto";
 import { storage } from "./storage";
+import { getBaseUrl } from "./config";
 
 // In-memory PKCE verifier store (key = state, value = code_verifier)
 // For production, move to Redis or DB. Acceptable for MVP.
@@ -59,7 +60,9 @@ function generateCodeChallenge(verifier: string): string {
 // REGISTER ALL OAUTH ROUTES
 // ============================================================
 export function registerOAuthRoutes(app: Express, requireAuth: any) {
-  const baseUrl = () => process.env.BASE_URL || "http://localhost:5000";
+  // Use the shared helper so we honor BASE_URL in prod and gracefully
+  // fall back to the request origin / localhost in dev.
+  const baseUrl = (req?: Request) => getBaseUrl(req);
 
   // ===================================================================
   // GOOGLE / YOUTUBE
@@ -69,7 +72,7 @@ export function registerOAuthRoutes(app: Express, requireAuth: any) {
       return res.status(400).json({ message: "GOOGLE_CLIENT_ID not configured", configured: false });
     }
     const state = encodeState(req.user!.id);
-    const redirectUri = `${baseUrl()}/api/social/youtube/callback`;
+    const redirectUri = `${baseUrl(req)}/api/social/youtube/callback`;
     const scope = "openid email profile https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/youtube.upload";
     const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id=${process.env.GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scope)}&access_type=offline&prompt=consent&state=${state}`;
     res.json({ authUrl, configured: true });
@@ -93,7 +96,7 @@ export function registerOAuthRoutes(app: Express, requireAuth: any) {
           code: String(code),
           client_id: process.env.GOOGLE_CLIENT_ID!,
           client_secret: process.env.GOOGLE_CLIENT_SECRET!,
-          redirect_uri: `${baseUrl()}/api/social/youtube/callback`,
+          redirect_uri: `${baseUrl(req)}/api/social/youtube/callback`,
           grant_type: "authorization_code",
         }).toString(),
       });
@@ -157,7 +160,7 @@ export function registerOAuthRoutes(app: Express, requireAuth: any) {
     const state = `${userId}:${Date.now()}:${stateNonce}`;
     pkceVerifiers.set(state, codeVerifier);
 
-    const redirectUri = `${baseUrl()}/api/social/twitter/callback`;
+    const redirectUri = `${baseUrl(req)}/api/social/twitter/callback`;
     const scope = "tweet.read tweet.write users.read offline.access";
     const authUrl = `https://twitter.com/i/oauth2/authorize?response_type=code&client_id=${process.env.TWITTER_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scope)}&state=${encodeURIComponent(state)}&code_challenge=${codeChallenge}&code_challenge_method=S256`;
     res.json({ authUrl, configured: true });
@@ -189,7 +192,7 @@ export function registerOAuthRoutes(app: Express, requireAuth: any) {
           code: String(code),
           grant_type: "authorization_code",
           client_id: process.env.TWITTER_CLIENT_ID!,
-          redirect_uri: `${baseUrl()}/api/social/twitter/callback`,
+          redirect_uri: `${baseUrl(req)}/api/social/twitter/callback`,
           code_verifier: codeVerifier,
         }).toString(),
       });
@@ -244,7 +247,7 @@ export function registerOAuthRoutes(app: Express, requireAuth: any) {
       return res.status(400).json({ message: "FACEBOOK_APP_ID not configured", configured: false });
     }
     const state = encodeState(req.user!.id);
-    const redirectUri = `${baseUrl()}/api/social/facebook/callback`;
+    const redirectUri = `${baseUrl(req)}/api/social/facebook/callback`;
     const scope = "pages_show_list,pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publish,business_management,public_profile,email";
     const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${process.env.FACEBOOK_APP_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scope)}&state=${state}&response_type=code`;
     res.json({ authUrl, configured: true });
@@ -261,7 +264,7 @@ export function registerOAuthRoutes(app: Express, requireAuth: any) {
       if (!userId) return res.type("html").send(popupResultHtml(false, "Session expired", "Facebook"));
 
       // Token exchange
-      const tokenUrl = `https://graph.facebook.com/v19.0/oauth/access_token?client_id=${process.env.FACEBOOK_APP_ID}&client_secret=${process.env.FACEBOOK_APP_SECRET}&redirect_uri=${encodeURIComponent(`${baseUrl()}/api/social/facebook/callback`)}&code=${encodeURIComponent(String(code))}`;
+      const tokenUrl = `https://graph.facebook.com/v19.0/oauth/access_token?client_id=${process.env.FACEBOOK_APP_ID}&client_secret=${process.env.FACEBOOK_APP_SECRET}&redirect_uri=${encodeURIComponent(`${baseUrl(req)}/api/social/facebook/callback`)}&code=${encodeURIComponent(String(code))}`;
       const tokenRes = await fetch(tokenUrl);
       if (!tokenRes.ok) {
         const errText = await tokenRes.text();

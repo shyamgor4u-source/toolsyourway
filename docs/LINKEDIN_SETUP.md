@@ -46,7 +46,7 @@ Add them to your Render environment variables (or local `.env`):
 ```
 LINKEDIN_CLIENT_ID=86abc...
 LINKEDIN_CLIENT_SECRET=WPL_AP...
-BASE_URL=https://toolsyourway.com
+BASE_URL=https://www.toolsyourway.com
 ```
 
 > **Important:** `BASE_URL` must match exactly what you registered as the redirect URL (minus the `/api/...` path).

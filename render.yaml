@@ -13,6 +13,10 @@ services:
         value: "5000"
       - key: SECURE_COOKIES
         value: "true"
+      # Canonical public origin. OAuth callbacks and payment redirects
+      # are built from this — never let it fall back to localhost in prod.
+      - key: BASE_URL
+        value: "https://www.toolsyourway.com"
       - key: SESSION_SECRET
         generateValue: true
       - key: ANTHROPIC_API_KEY
@@ -30,4 +34,35 @@ services:
       - key: MICROSOFT_CLIENT_SECRET
         sync: false
       - key: MICROSOFT_REDIRECT_URI
-        value: "https://toolsyourway.com/api/auth/microsoft/callback"
+        value: "https://www.toolsyourway.com/api/auth/microsoft/callback"
+      # Razorpay (India). KEY_ID is sent to the browser to open Checkout;
+      # KEY_SECRET stays server-side for HMAC signature verification.
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      # Stripe (international cards)
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      # PayPal (global)
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_SECRET
+        sync: false
+      # LinkedIn / X / Facebook / Replicate — set in dashboard if used
+      - key: LINKEDIN_CLIENT_ID
+        sync: false
+      - key: LINKEDIN_CLIENT_SECRET
+        sync: false
+      - key: TWITTER_CLIENT_ID
+        sync: false
+      - key: TWITTER_CLIENT_SECRET
+        sync: false
+      - key: FACEBOOK_APP_ID
+        sync: false
+      - key: FACEBOOK_APP_SECRET
+        sync: false
+      - key: REPLICATE_API_TOKEN
+        sync: false
