@@ -251,6 +251,10 @@ async function initDb() {
     "ALTER TABLE social_connections ADD COLUMN display_name TEXT",
     "ALTER TABLE social_connections ADD COLUMN profile_url TEXT",
     "ALTER TABLE social_connections ADD COLUMN follower_count INTEGER",
+    // OAuth 1.0a fields for X/Twitter (used for media upload via v1.1 endpoints)
+    "ALTER TABLE social_connections ADD COLUMN oauth1_token TEXT",
+    "ALTER TABLE social_connections ADD COLUMN oauth1_token_secret TEXT",
+    "ALTER TABLE social_connections ADD COLUMN auth_version TEXT DEFAULT 'oauth2'",
   ];
   for (const sql of migrations) {
     try { await client.execute(sql); } catch (e: any) {
@@ -417,15 +421,22 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(socialConnections).where(eq(socialConnections.userId, userId));
   }
 
-  async connectSocial(data: { userId: number; platform: string; accountName?: string | null; accountId?: string | null; accountType?: string | null; pages?: string | null; profilePictureUrl?: string | null; displayName?: string | null; profileUrl?: string | null; followerCount?: number | null; accessToken?: string | null; refreshToken?: string | null; expiresAt?: string | null; pageId?: string | null; pageName?: string | null }) {
-    // Upsert — replace if same user+platform exists
+  async connectSocial(data: { userId: number; platform: string; accountName?: string | null; accountId?: string | null; accountType?: string | null; pages?: string | null; profilePictureUrl?: string | null; displayName?: string | null; profileUrl?: string | null; followerCount?: number | null; accessToken?: string | null; refreshToken?: string | null; expiresAt?: string | null; pageId?: string | null; pageName?: string | null; oauth1Token?: string | null; oauth1TokenSecret?: string | null; authVersion?: string | null }) {
+    // Upsert — merge if same user+platform exists. Only overwrite columns
+    // explicitly supplied so that an OAuth 1.0a connect does not clobber the
+    // existing OAuth 2.0 access/refresh token (and vice versa) for the same
+    // platform record.
     const existing = await db.select().from(socialConnections)
       .where(sql`${socialConnections.userId} = ${data.userId} AND ${socialConnections.platform} = ${data.platform}`);
     if (existing[0]) {
-      const rows = await db.update(socialConnections).set({ ...data, status: "connected" }).where(eq(socialConnections.id, existing[0].id)).returning();
+      const patch: Record<string, any> = { status: "connected" };
+      for (const [k, v] of Object.entries(data)) {
+        if (v !== undefined) patch[k] = v;
+      }
+      const rows = await db.update(socialConnections).set(patch as any).where(eq(socialConnections.id, existing[0].id)).returning();
       return rows[0];
     }
-    const rows = await db.insert(socialConnections).values(data).returning();
+    const rows = await db.insert(socialConnections).values(data as any).returning();
     return rows[0];
   }
 

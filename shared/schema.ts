@@ -125,6 +125,10 @@ export const socialConnections = sqliteTable("social_connections", {
   followerCount: integer("follower_count"), // Latest known follower count
   accessToken: text("access_token"), // encrypted in production
   refreshToken: text("refresh_token"),
+  // OAuth 1.0a (X/Twitter) — kept separately so OAuth 2.0 PKCE record is not clobbered
+  oauth1Token: text("oauth1_token"), // OAuth 1.0a access token
+  oauth1TokenSecret: text("oauth1_token_secret"), // OAuth 1.0a access token secret
+  authVersion: text("auth_version").default("oauth2"), // oauth2 | oauth2_pkce | oauth1
   status: text("status").notNull().default("connected"), // connected | expired | disconnected
   connectedAt: text("connected_at").notNull().$defaultFn(() => new Date().toISOString()),
   expiresAt: text("expires_at"),

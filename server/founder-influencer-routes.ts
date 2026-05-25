@@ -640,20 +640,27 @@ Mix content types. Aim for 1 post per day. Make topics SPECIFIC (not "share tips
   });
 
   // Twitter: post a tweet or thread (requires tweet.write scope)
+  // For tweets with media attached, prefer POST /api/publish/twitter-with-media,
+  // which performs the OAuth 1.0a media upload first and then attaches media_ids
+  // here. `mediaIds` (already-uploaded ids) can be passed for the first tweet.
   app.post("/api/publish/twitter-post", requireAuth, requireActiveAccess, async (req: Request, res: Response) => {
     try {
-      const { text, thread } = req.body as any; // thread = array of tweets
+      const { text, thread, mediaIds } = req.body as any; // thread = array of tweets
       const connections = await storage.getSocialConnections(req.user!.id);
       const twitter = connections.find((c: any) => c.platform === "twitter" && c.status === "connected" && c.accessToken);
       if (!twitter?.accessToken) {
-        return res.status(400).json({ message: "Connect your X (Twitter) account first.", needsConnect: true });
+        return res.status(400).json({ message: "Connect your X (Twitter) account first (OAuth 2.0 PKCE).", needsConnect: true });
       }
       const tweets = Array.isArray(thread) && thread.length > 0 ? thread : [text];
       let lastId: string | undefined;
       const posted: any[] = [];
-      for (const tweetText of tweets) {
+      for (let i = 0; i < tweets.length; i++) {
+        const tweetText = tweets[i];
         const body: any = { text: tweetText };
         if (lastId) body.reply = { in_reply_to_tweet_id: lastId };
+        if (i === 0 && Array.isArray(mediaIds) && mediaIds.length > 0) {
+          body.media = { media_ids: mediaIds };
+        }
         const resp = await fetch("https://api.twitter.com/2/tweets", {
           method: "POST",
           headers: {

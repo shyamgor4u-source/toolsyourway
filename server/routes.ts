@@ -1105,7 +1105,7 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
       const { platform, accountName } = req.body;
       if (!platform) return res.status(400).json({ message: "Platform is required" });
 
-      const validPlatforms = ["linkedin", "instagram", "tiktok", "facebook", "twitter", "youtube"];
+      const validPlatforms = ["linkedin", "instagram", "tiktok", "facebook", "twitter", "twitter_oauth1", "youtube"];
       if (!validPlatforms.includes(platform)) {
         return res.status(400).json({ message: "Invalid platform" });
       }
@@ -1133,6 +1133,12 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
           clientId: process.env.TWITTER_CLIENT_ID,
           oauthStart: process.env.TWITTER_CLIENT_ID ? "/api/social/twitter/oauth-start" : undefined,
         },
+        // Pseudo-platform key "twitter_oauth1" — frontend can request this
+        // explicitly when it wants the OAuth 1.0a (media-upload) flow.
+        twitter_oauth1: {
+          clientId: process.env.TWITTER_API_KEY || process.env.TWITTER_CLIENT_ID,
+          oauthStart: (process.env.TWITTER_API_KEY || process.env.TWITTER_CLIENT_ID) ? "/api/social/twitter/oauth1-start" : undefined,
+        },
         instagram: {
           clientId: process.env.FACEBOOK_APP_ID,
           // Instagram is connected via Facebook OAuth (Graph API)
@@ -1154,7 +1160,12 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
       // For PKCE platforms (Twitter) and platforms needing dynamic state (Google/YouTube, Facebook/Instagram),
       // tell the frontend to call the oauth-start endpoint to get the auth URL.
       if (config?.oauthStart) {
-        return res.json({ usePkce: true, oauthStartUrl: config.oauthStart });
+        // Tell the frontend which OAuth variant it is initiating so the UI
+        // can label connect buttons (e.g. "Connect X for media upload").
+        const authVersion = platform === "twitter_oauth1"
+          ? "oauth1"
+          : (platform === "twitter" ? "oauth2_pkce" : "oauth2");
+        return res.json({ usePkce: true, oauthStartUrl: config.oauthStart, authVersion });
       }
 
       // ADMIN ACCOUNTS: require real OAuth — no demo connects

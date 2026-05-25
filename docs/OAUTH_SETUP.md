@@ -174,26 +174,36 @@ FACEBOOK_APP_SECRET=abc123...
 3. **Subscribe to Basic plan** ($200/mo) — required for `tweet.write` scope
 4. Click **+ Add App** → Name: `ToolsYourWay`
 
-### Configure OAuth 2.0
+### Configure OAuth 2.0 + OAuth 1.0a
 1. App settings → **User authentication settings → Set up**
 2. **App permissions:** **Read and write** (and Direct Message if you want DM later)
 3. **Type of app:** **Web App**
-4. **Callback URI / Redirect URL:**
-   - `https://toolsyourway.com/api/social/twitter/callback`
+4. **Callback URI / Redirect URL** — add **all four**:
+   - `https://www.toolsyourway.com/api/social/twitter/callback` (OAuth 2.0 PKCE — tweet posting)
+   - `https://www.toolsyourway.com/api/social/twitter/oauth1/callback` (OAuth 1.0a — media upload)
    - `http://localhost:5000/api/social/twitter/callback`
-5. **Website URL:** `https://toolsyourway.com`
+   - `http://localhost:5000/api/social/twitter/oauth1/callback`
+5. **Website URL:** `https://www.toolsyourway.com`
 6. Save
 
 ### Get credentials
 1. **Keys and tokens** tab
-2. Under **OAuth 2.0 Client ID and Client Secret**, click **Generate**
-3. Copy **Client ID** and **Client Secret**
+2. Under **OAuth 2.0 Client ID and Client Secret**, click **Generate** → Copy.
+3. Under **Consumer Keys**, copy the **API Key** and **API Key Secret** (these are the OAuth 1.0a "consumer key/secret").
 
 ### Add to Render env vars
 ```
+# OAuth 2.0 PKCE (posting text tweets / threads)
 TWITTER_CLIENT_ID=Z3...
 TWITTER_CLIENT_SECRET=abc123...
+
+# OAuth 1.0a (media upload — image / GIF / video)
+# Falls back to TWITTER_CLIENT_ID/_SECRET if unset.
+TWITTER_API_KEY=abc...
+TWITTER_API_SECRET=def...
 ```
+
+> **Why two flows?** The v2 PKCE bearer cannot sign the v1.1 chunked media-upload endpoint, which is still the only stable cross-account way to upload images and videos to X. See [`TWITTER_X_SETUP.md`](./TWITTER_X_SETUP.md) for the full media-upload pipeline (INIT/APPEND/FINALIZE/STATUS) and supported types.
 
 ---
 

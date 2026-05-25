@@ -57,6 +57,82 @@ function generateCodeChallenge(verifier: string): string {
 }
 
 // ============================================================
+// OAuth 1.0a helpers (X/Twitter) — used for media upload on v1.1
+// ============================================================
+// In-memory request-token store. Acceptable for a single-instance Render
+// deploy (process-local); for multi-instance, move to Redis or DB.
+const oauth1RequestTokens = new Map<string, { secret: string; userId: number; ts: number }>();
+setInterval(() => {
+  const cutoff = Date.now() - 15 * 60 * 1000;
+  oauth1RequestTokens.forEach((v, k) => {
+    if (v.ts < cutoff) oauth1RequestTokens.delete(k);
+  });
+}, 5 * 60 * 1000);
+
+// Resolve OAuth 1.0a credentials with a backwards-compatible fallback.
+// Prefer explicit TWITTER_API_KEY / TWITTER_API_SECRET (the standard X
+// developer-portal terminology for OAuth 1.0a), but if those are not set
+// and the deployer has only supplied TWITTER_CLIENT_ID / _SECRET (the
+// existing env names this repo used for OAuth 2.0 PKCE), reuse them —
+// for many X apps the same credentials work for both flows.
+function twitterOauth1Creds(): { key?: string; secret?: string } {
+  return {
+    key: process.env.TWITTER_API_KEY || process.env.TWITTER_CLIENT_ID,
+    secret: process.env.TWITTER_API_SECRET || process.env.TWITTER_CLIENT_SECRET,
+  };
+}
+
+// RFC 3986 percent-encoding (note: encodeURIComponent skips !*'() — must encode).
+function rfc3986(str: string): string {
+  return encodeURIComponent(str).replace(/[!*'()]/g, c => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+}
+
+// Build OAuth 1.0a Authorization header for a given request.
+// `params` are extra OAuth params (oauth_callback, oauth_token, oauth_verifier).
+// `bodyParams` are application/x-www-form-urlencoded body params that must be
+// folded into the signature base string (per RFC 5849 §3.4.1.3).
+function buildOauth1Header(opts: {
+  method: string;
+  url: string;
+  consumerKey: string;
+  consumerSecret: string;
+  token?: string;
+  tokenSecret?: string;
+  extraOauth?: Record<string, string>;
+  queryParams?: Record<string, string>;
+  bodyParams?: Record<string, string>;
+}): string {
+  const { method, url, consumerKey, consumerSecret, token, tokenSecret, extraOauth, queryParams, bodyParams } = opts;
+  const oauthParams: Record<string, string> = {
+    oauth_consumer_key: consumerKey,
+    oauth_nonce: crypto.randomBytes(16).toString("hex"),
+    oauth_signature_method: "HMAC-SHA1",
+    oauth_timestamp: Math.floor(Date.now() / 1000).toString(),
+    oauth_version: "1.0",
+    ...(token ? { oauth_token: token } : {}),
+    ...(extraOauth || {}),
+  };
+
+  // Signature base
+  const allParams: Record<string, string> = { ...oauthParams, ...(queryParams || {}), ...(bodyParams || {}) };
+  const paramString = Object.keys(allParams)
+    .sort()
+    .map(k => `${rfc3986(k)}=${rfc3986(allParams[k])}`)
+    .join("&");
+
+  const baseString = [method.toUpperCase(), rfc3986(url), rfc3986(paramString)].join("&");
+  const signingKey = `${rfc3986(consumerSecret)}&${rfc3986(tokenSecret || "")}`;
+  const signature = crypto.createHmac("sha1", signingKey).update(baseString).digest("base64");
+
+  const headerParams: Record<string, string> = { ...oauthParams, oauth_signature: signature };
+  const headerStr = Object.keys(headerParams)
+    .sort()
+    .map(k => `${rfc3986(k)}="${rfc3986(headerParams[k])}"`)
+    .join(", ");
+  return `OAuth ${headerStr}`;
+}
+
+// ============================================================
 // REGISTER ALL OAUTH ROUTES
 // ============================================================
 export function registerOAuthRoutes(app: Express, requireAuth: any) {
@@ -239,6 +315,112 @@ export function registerOAuthRoutes(app: Express, requireAuth: any) {
   });
 
   // ===================================================================
+  // TWITTER / X (OAuth 1.0a three-legged) — required for media upload
+  // (image/video) since the v2 PKCE token alone cannot sign v1.1 media
+  // endpoints.
+  // ===================================================================
+  app.post("/api/social/twitter/oauth1-start", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { key, secret } = twitterOauth1Creds();
+      if (!key || !secret) {
+        return res.status(400).json({
+          message: "TWITTER_API_KEY / TWITTER_API_SECRET not configured (OAuth 1.0a). You can also reuse TWITTER_CLIENT_ID / _SECRET if they are valid for OAuth 1.0a.",
+          configured: false,
+        });
+      }
+      const callbackUrl = `${baseUrl(req)}/api/social/twitter/oauth1/callback`;
+      const requestTokenUrl = "https://api.x.com/oauth/request_token";
+      const authHeader = buildOauth1Header({
+        method: "POST",
+        url: requestTokenUrl,
+        consumerKey: key,
+        consumerSecret: secret,
+        extraOauth: { oauth_callback: callbackUrl },
+      });
+      const r = await fetch(requestTokenUrl, { method: "POST", headers: { Authorization: authHeader } });
+      const body = await r.text();
+      if (!r.ok) {
+        console.error("Twitter OAuth1 request_token failed:", body);
+        return res.status(400).json({ message: `Twitter request_token failed: ${body.slice(0, 200)}` });
+      }
+      const parsed = new URLSearchParams(body);
+      const oauthToken = parsed.get("oauth_token");
+      const oauthTokenSecret = parsed.get("oauth_token_secret");
+      const callbackConfirmed = parsed.get("oauth_callback_confirmed");
+      if (!oauthToken || !oauthTokenSecret || callbackConfirmed !== "true") {
+        return res.status(400).json({ message: "Twitter request_token returned unexpected payload — check callback URL whitelist in X portal." });
+      }
+      oauth1RequestTokens.set(oauthToken, { secret: oauthTokenSecret, userId: req.user!.id, ts: Date.now() });
+      const authUrl = `https://api.x.com/oauth/authorize?oauth_token=${encodeURIComponent(oauthToken)}`;
+      res.json({ authUrl, configured: true });
+    } catch (e: any) {
+      console.error("Twitter OAuth1 start error:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/social/twitter/oauth1/callback", async (req: Request, res: Response) => {
+    try {
+      const { oauth_token, oauth_verifier, denied } = req.query as any;
+      if (denied) return res.type("html").send(popupResultHtml(false, "User denied X authorization", "X"));
+      if (!oauth_token || !oauth_verifier) {
+        return res.type("html").send(popupResultHtml(false, "Missing oauth_token / oauth_verifier", "X"));
+      }
+      const pending = oauth1RequestTokens.get(String(oauth_token));
+      if (!pending) {
+        return res.type("html").send(popupResultHtml(false, "Request token expired — please retry", "X"));
+      }
+      oauth1RequestTokens.delete(String(oauth_token));
+      const { key, secret } = twitterOauth1Creds();
+      if (!key || !secret) {
+        return res.type("html").send(popupResultHtml(false, "Twitter OAuth 1.0a not configured", "X"));
+      }
+      // Exchange for access token
+      const accessTokenUrl = "https://api.x.com/oauth/access_token";
+      const authHeader = buildOauth1Header({
+        method: "POST",
+        url: accessTokenUrl,
+        consumerKey: key,
+        consumerSecret: secret,
+        token: String(oauth_token),
+        tokenSecret: pending.secret,
+        extraOauth: { oauth_verifier: String(oauth_verifier) },
+      });
+      const r = await fetch(accessTokenUrl, { method: "POST", headers: { Authorization: authHeader } });
+      const body = await r.text();
+      if (!r.ok) {
+        console.error("Twitter OAuth1 access_token failed:", body);
+        return res.type("html").send(popupResultHtml(false, "Access token exchange failed", "X"));
+      }
+      const parsed = new URLSearchParams(body);
+      const accessToken = parsed.get("oauth_token");
+      const accessTokenSecret = parsed.get("oauth_token_secret");
+      const screenName = parsed.get("screen_name") || undefined;
+      const userIdStr = parsed.get("user_id") || undefined;
+      if (!accessToken || !accessTokenSecret) {
+        return res.type("html").send(popupResultHtml(false, "Twitter returned no access token", "X"));
+      }
+      // Merge into existing twitter connection (preserves OAuth 2.0 PKCE
+      // fields like accessToken/refreshToken if already present).
+      await storage.connectSocial({
+        userId: pending.userId,
+        platform: "twitter",
+        accountId: userIdStr,
+        accountName: screenName ? `@${screenName}` : undefined,
+        displayName: screenName,
+        profileUrl: screenName ? `https://twitter.com/${screenName}` : undefined,
+        oauth1Token: accessToken,
+        oauth1TokenSecret: accessTokenSecret,
+        authVersion: "oauth1",
+      });
+      res.type("html").send(popupResultHtml(true, `OAuth 1.0a (media) linked${screenName ? `: @${screenName}` : ""}`, "X"));
+    } catch (e: any) {
+      console.error("Twitter OAuth1 callback error:", e);
+      res.type("html").send(popupResultHtml(false, e.message || "Unknown error", "X"));
+    }
+  });
+
+  // ===================================================================
   // FACEBOOK / INSTAGRAM (unified Graph API flow)
   // Connecting Facebook also fetches Instagram Business accounts linked to it.
   // ===================================================================
@@ -400,6 +582,285 @@ export function registerOAuthRoutes(app: Express, requireAuth: any) {
       const published: any = await publishRes.json();
       res.json({ success: true, mediaId: published.id, message: "Posted to Instagram" });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ===================================================================
+  // TWITTER / X — media upload + publish (with OAuth 1.0a for media)
+  // ===================================================================
+  // Hard limits per X v1.1 media upload docs.
+  const X_MEDIA_MAX_IMAGE_BYTES = 5 * 1024 * 1024;       // 5 MB (photo)
+  const X_MEDIA_MAX_GIF_BYTES = 15 * 1024 * 1024;        // 15 MB (gif)
+  const X_MEDIA_MAX_VIDEO_BYTES = 512 * 1024 * 1024;     // 512 MB (video)
+  const X_MEDIA_DOWNLOAD_TIMEOUT_MS = 60_000;
+  const ALLOWED_IMAGE_MIMES = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+  const ALLOWED_GIF_MIMES = ["image/gif"];
+  const ALLOWED_VIDEO_MIMES = ["video/mp4", "video/quicktime"];
+
+  // Basic SSRF guard: only http(s), reject obvious private/local hosts.
+  function isUnsafeUrl(url: string): string | null {
+    let u: URL;
+    try { u = new URL(url); } catch { return "Invalid URL"; }
+    if (u.protocol !== "http:" && u.protocol !== "https:") return "Only http/https URLs are allowed";
+    const host = u.hostname.toLowerCase();
+    if (host === "localhost" || host === "0.0.0.0" || host === "::1") return "Local hosts are not allowed";
+    // Reject obvious IPv4 private ranges (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16)
+    const m = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (m) {
+      const [a, b] = [parseInt(m[1], 10), parseInt(m[2], 10)];
+      if (a === 10 || a === 127 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) || (a === 169 && b === 254)) {
+        return "Private IP addresses are not allowed";
+      }
+    }
+    return null;
+  }
+
+  async function downloadMedia(url: string, maxBytes: number): Promise<{ buffer: Buffer; contentType: string }> {
+    const unsafe = isUnsafeUrl(url);
+    if (unsafe) throw new Error(unsafe);
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), X_MEDIA_DOWNLOAD_TIMEOUT_MS);
+    try {
+      const r = await fetch(url, { signal: ctrl.signal, redirect: "follow" });
+      if (!r.ok) throw new Error(`Media fetch failed: HTTP ${r.status}`);
+      const lenHeader = r.headers.get("content-length");
+      if (lenHeader && parseInt(lenHeader, 10) > maxBytes) {
+        throw new Error(`Media too large: ${lenHeader} bytes > ${maxBytes}`);
+      }
+      const contentType = (r.headers.get("content-type") || "application/octet-stream").split(";")[0].trim().toLowerCase();
+      const ab = await r.arrayBuffer();
+      const buffer = Buffer.from(ab);
+      if (buffer.length > maxBytes) throw new Error(`Media too large: ${buffer.length} bytes > ${maxBytes}`);
+      return { buffer, contentType };
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  // Multipart/form-data builder for X v1.1 media/upload.json (INIT/APPEND/FINALIZE/STATUS).
+  function buildMultipart(fields: Record<string, string | { value: Buffer; filename: string; contentType: string }>): { body: Buffer; contentType: string } {
+    const boundary = "----twboundary" + crypto.randomBytes(12).toString("hex");
+    const chunks: Buffer[] = [];
+    for (const [name, val] of Object.entries(fields)) {
+      chunks.push(Buffer.from(`--${boundary}\r\n`));
+      if (typeof val === "string") {
+        chunks.push(Buffer.from(`Content-Disposition: form-data; name="${name}"\r\n\r\n${val}\r\n`));
+      } else {
+        chunks.push(Buffer.from(`Content-Disposition: form-data; name="${name}"; filename="${val.filename}"\r\nContent-Type: ${val.contentType}\r\n\r\n`));
+        chunks.push(val.value);
+        chunks.push(Buffer.from("\r\n"));
+      }
+    }
+    chunks.push(Buffer.from(`--${boundary}--\r\n`));
+    return { body: Buffer.concat(chunks), contentType: `multipart/form-data; boundary=${boundary}` };
+  }
+
+  // Upload media to X via the legacy v1.1 chunked upload (INIT/APPEND/FINALIZE).
+  // The v1.1 endpoint remains the most reliable cross-account path and accepts
+  // images, GIFs and videos. Requires OAuth 1.0a user-context auth — that is
+  // why this whole feature exists.
+  async function xUploadMedia(opts: {
+    consumerKey: string;
+    consumerSecret: string;
+    oauth1Token: string;
+    oauth1TokenSecret: string;
+    buffer: Buffer;
+    contentType: string;
+    mediaCategory: "tweet_image" | "tweet_gif" | "tweet_video";
+  }): Promise<string> {
+    const { consumerKey, consumerSecret, oauth1Token, oauth1TokenSecret, buffer, contentType, mediaCategory } = opts;
+    const uploadUrl = "https://upload.twitter.com/1.1/media/upload.json";
+
+    const signedHeader = (bodyParams: Record<string, string>) => buildOauth1Header({
+      method: "POST",
+      url: uploadUrl,
+      consumerKey, consumerSecret,
+      token: oauth1Token, tokenSecret: oauth1TokenSecret,
+      bodyParams,
+    });
+
+    // INIT
+    const initBody = new URLSearchParams({
+      command: "INIT",
+      total_bytes: String(buffer.length),
+      media_type: contentType,
+      media_category: mediaCategory,
+    });
+    const initRes = await fetch(uploadUrl, {
+      method: "POST",
+      headers: {
+        Authorization: signedHeader(Object.fromEntries(initBody.entries())),
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: initBody.toString(),
+    });
+    if (!initRes.ok) throw new Error(`X media INIT failed: ${(await initRes.text()).slice(0, 200)}`);
+    const init = await initRes.json() as any;
+    const mediaId: string = init.media_id_string;
+    if (!mediaId) throw new Error("X media INIT returned no media_id_string");
+
+    // APPEND — 4MB chunks
+    const chunkSize = 4 * 1024 * 1024;
+    let segment = 0;
+    for (let offset = 0; offset < buffer.length; offset += chunkSize) {
+      const chunk = buffer.subarray(offset, Math.min(offset + chunkSize, buffer.length));
+      // For multipart APPEND, the body params are excluded from the signature
+      // (RFC 5849 only folds in application/x-www-form-urlencoded bodies).
+      const { body, contentType: mpType } = buildMultipart({
+        command: "APPEND",
+        media_id: mediaId,
+        segment_index: String(segment),
+        media: { value: chunk, filename: "chunk.bin", contentType: "application/octet-stream" },
+      });
+      const appendHeader = buildOauth1Header({
+        method: "POST",
+        url: uploadUrl,
+        consumerKey, consumerSecret,
+        token: oauth1Token, tokenSecret: oauth1TokenSecret,
+      });
+      const appendRes = await fetch(uploadUrl, {
+        method: "POST",
+        headers: { Authorization: appendHeader, "Content-Type": mpType },
+        body,
+      });
+      if (!appendRes.ok && appendRes.status !== 204) {
+        throw new Error(`X media APPEND seg ${segment} failed: ${(await appendRes.text()).slice(0, 200)}`);
+      }
+      segment++;
+    }
+
+    // FINALIZE
+    const finBody = new URLSearchParams({ command: "FINALIZE", media_id: mediaId });
+    const finRes = await fetch(uploadUrl, {
+      method: "POST",
+      headers: {
+        Authorization: signedHeader(Object.fromEntries(finBody.entries())),
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: finBody.toString(),
+    });
+    if (!finRes.ok) throw new Error(`X media FINALIZE failed: ${(await finRes.text()).slice(0, 200)}`);
+    const fin: any = await finRes.json();
+
+    // STATUS polling if async processing required (mostly for video)
+    if (fin.processing_info) {
+      let info = fin.processing_info;
+      while (info && (info.state === "pending" || info.state === "in_progress")) {
+        await new Promise(r => setTimeout(r, Math.max(1000, (info.check_after_secs || 1) * 1000)));
+        const statusHeader = buildOauth1Header({
+          method: "GET",
+          url: uploadUrl,
+          consumerKey, consumerSecret,
+          token: oauth1Token, tokenSecret: oauth1TokenSecret,
+          queryParams: { command: "STATUS", media_id: mediaId },
+        });
+        const statusRes = await fetch(`${uploadUrl}?command=STATUS&media_id=${mediaId}`, {
+          headers: { Authorization: statusHeader },
+        });
+        if (!statusRes.ok) throw new Error(`X media STATUS failed: ${(await statusRes.text()).slice(0, 200)}`);
+        const sj: any = await statusRes.json();
+        info = sj.processing_info;
+        if (info?.state === "failed") {
+          throw new Error(`X video processing failed: ${info.error?.message || "unknown"}`);
+        }
+      }
+    }
+    return mediaId;
+  }
+
+  // Publish a tweet with optional media (images and/or video) by URL.
+  // Media is uploaded via OAuth 1.0a v1.1, then the resulting media_id is
+  // attached to a POST /2/tweets call signed with the OAuth 2.0 bearer.
+  app.post("/api/publish/twitter-with-media", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { text, imageUrls, videoUrl, mediaIds: providedMediaIds } = req.body as {
+        text?: string;
+        imageUrls?: string[];
+        videoUrl?: string;
+        mediaIds?: string[];
+      };
+
+      if (!text && !imageUrls?.length && !videoUrl && !providedMediaIds?.length) {
+        return res.status(400).json({ message: "Provide text and/or imageUrls/videoUrl/mediaIds" });
+      }
+
+      const conns = await storage.getSocialConnections(req.user!.id);
+      const tw: any = conns.find((c: any) => c.platform === "twitter" && c.status === "connected");
+      if (!tw) return res.status(400).json({ message: "Connect X first", needsConnect: true });
+      if (!tw.accessToken) {
+        return res.status(400).json({ message: "OAuth 2.0 X token missing — reconnect X (PKCE) to publish tweets.", needsConnect: true, authVersion: "oauth2_pkce" });
+      }
+
+      let mediaIds: string[] = providedMediaIds ? [...providedMediaIds] : [];
+      const wantsUpload = (imageUrls && imageUrls.length > 0) || !!videoUrl;
+      if (wantsUpload) {
+        const { key, secret } = twitterOauth1Creds();
+        if (!key || !secret) {
+          return res.status(400).json({
+            message: "Media upload needs OAuth 1.0a credentials. Set TWITTER_API_KEY and TWITTER_API_SECRET.",
+            needsConfig: true,
+          });
+        }
+        if (!tw.oauth1Token || !tw.oauth1TokenSecret) {
+          return res.status(400).json({
+            message: "Media upload needs OAuth 1.0a connection. Call /api/social/twitter/oauth1-start to link X for media.",
+            needsConnect: true,
+            authVersion: "oauth1",
+          });
+        }
+
+        // Upload images
+        for (const url of (imageUrls || []).slice(0, 4)) {  // tweet allows up to 4 images
+          const { buffer, contentType } = await downloadMedia(url, X_MEDIA_MAX_IMAGE_BYTES);
+          let category: "tweet_image" | "tweet_gif" = "tweet_image";
+          let maxBytes = X_MEDIA_MAX_IMAGE_BYTES;
+          if (ALLOWED_GIF_MIMES.includes(contentType)) { category = "tweet_gif"; maxBytes = X_MEDIA_MAX_GIF_BYTES; }
+          else if (!ALLOWED_IMAGE_MIMES.includes(contentType)) {
+            return res.status(400).json({ message: `Unsupported image type: ${contentType}` });
+          }
+          if (buffer.length > maxBytes) return res.status(400).json({ message: `Image too large (${buffer.length} bytes)` });
+          const mediaId = await xUploadMedia({
+            consumerKey: key, consumerSecret: secret,
+            oauth1Token: tw.oauth1Token, oauth1TokenSecret: tw.oauth1TokenSecret,
+            buffer, contentType, mediaCategory: category,
+          });
+          mediaIds.push(mediaId);
+        }
+        // Upload video (one only; X does not mix video + images in same tweet)
+        if (videoUrl) {
+          const { buffer, contentType } = await downloadMedia(videoUrl, X_MEDIA_MAX_VIDEO_BYTES);
+          if (!ALLOWED_VIDEO_MIMES.includes(contentType)) {
+            return res.status(400).json({ message: `Unsupported video type: ${contentType}` });
+          }
+          const mediaId = await xUploadMedia({
+            consumerKey: key, consumerSecret: secret,
+            oauth1Token: tw.oauth1Token, oauth1TokenSecret: tw.oauth1TokenSecret,
+            buffer, contentType, mediaCategory: "tweet_video",
+          });
+          mediaIds = [mediaId]; // video must be solo
+        }
+      }
+
+      // Compose the tweet via OAuth 2.0 bearer (works fine with media_ids attached).
+      const body: any = { text: text || "" };
+      if (mediaIds.length > 0) body.media = { media_ids: mediaIds };
+      const r = await fetch("https://api.twitter.com/2/tweets", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${tw.accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        const errText = await r.text();
+        return res.status(r.status).json({ message: `Tweet publish failed: ${errText.slice(0, 300)}`, mediaIds });
+      }
+      const data: any = await r.json();
+      res.json({ success: true, tweetId: data.data?.id, mediaIds, url: `https://twitter.com/i/web/status/${data.data?.id}` });
+    } catch (e: any) {
+      console.error("twitter-with-media error:", e);
+      res.status(500).json({ message: e.message });
+    }
   });
 
   // Facebook Page post

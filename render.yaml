@@ -60,6 +60,12 @@ services:
         sync: false
       - key: TWITTER_CLIENT_SECRET
         sync: false
+      # OAuth 1.0a (X) — needed for media upload (image/GIF/video).
+      # If unset, server falls back to TWITTER_CLIENT_ID/_SECRET.
+      - key: TWITTER_API_KEY
+        sync: false
+      - key: TWITTER_API_SECRET
+        sync: false
       - key: FACEBOOK_APP_ID
         sync: false
       - key: FACEBOOK_APP_SECRET
