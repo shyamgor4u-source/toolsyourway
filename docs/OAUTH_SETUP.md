@@ -131,10 +131,17 @@ GOOGLE_CLIENT_SECRET=GOCSPX-abc...
 
 ### Configure OAuth redirect URIs
 1. App dashboard → **Facebook Login → Settings**
-2. **Valid OAuth Redirect URIs:**
-   - `https://toolsyourway.com/api/social/facebook/callback`
+2. **Valid OAuth Redirect URIs** (add all four — Facebook and Instagram each
+   have their own callback):
+   - `https://www.toolsyourway.com/api/social/instagram/oauth/callback`
+   - `http://localhost:5000/api/social/instagram/oauth/callback`
+   - `https://www.toolsyourway.com/api/social/facebook/callback`
    - `http://localhost:5000/api/social/facebook/callback`
 3. Save changes
+
+> Instagram now has a first-class flow: `POST /api/social/instagram/oauth-start`
+> → `GET /api/social/instagram/oauth/callback`. See `docs/INSTAGRAM_SETUP.md`
+> for the full Instagram reference (carousel + reel publishing, multi-account).
 
 ### Add Instagram Graph API
 1. **Add product** → **Instagram → Set up**
@@ -220,7 +227,7 @@ TWITTER_API_SECRET=def...
 |---|---|---|
 | **LinkedIn** | "Post" button on LinkedIn card → drafts text → **Post to LinkedIn** | Post appears on user's feed |
 | **X / Twitter** | (TBD — UI button coming) | Tweet appears on user's profile |
-| **Instagram** | Coming — requires public image URL | Post appears on user's IG feed |
+| **Instagram** | `POST /api/publish/instagram-post` with `{ imageUrl }` (public HTTPS), `{ imageUrls[] }` for carousel, or `{ videoUrl }` for a reel | Post appears on user's IG feed |
 | **YouTube** | Connection test only — video upload coming | Channel info populated |
 
 ## Troubleshooting

@@ -33,6 +33,49 @@ function decodeState(state: string): { userId: number; ts: number } | null {
   } catch { return null; }
 }
 
+// Signed state: `<userId>:<ts>:<nonce>.<hmac>`. The HMAC is keyed on
+// SESSION_SECRET so a tampered/forged state cannot bind the OAuth callback
+// to an arbitrary userId. Falls back to a fixed dev key when SESSION_SECRET
+// is unset (local development only). Stays decode-compatible with the legacy
+// unsigned format above so older popups already in flight still resolve.
+const STATE_SECRET = process.env.SESSION_SECRET || "toolsyourway-dev-state-secret";
+const STATE_MAX_AGE_MS = 15 * 60 * 1000;
+
+function signState(userId: number): string {
+  const payload = `${userId}:${Date.now()}:${crypto.randomBytes(8).toString("hex")}`;
+  const sig = crypto.createHmac("sha256", STATE_SECRET).update(payload).digest("base64url");
+  return `${Buffer.from(payload).toString("base64url")}.${sig}`;
+}
+
+function verifyState(state: string): { userId: number; ts: number } | null {
+  const dot = state.lastIndexOf(".");
+  if (dot === -1) {
+    // Legacy unsigned state (base64url of `userId:ts:nonce`) — accept for
+    // backward compatibility but still enforce the freshness window.
+    const legacy = decodeState(state);
+    if (legacy && Number.isFinite(legacy.userId) && Date.now() - legacy.ts <= STATE_MAX_AGE_MS) {
+      return legacy;
+    }
+    return null;
+  }
+  const payloadB64 = state.slice(0, dot);
+  const sig = state.slice(dot + 1);
+  let payload: string;
+  try {
+    payload = Buffer.from(payloadB64, "base64url").toString("utf-8");
+  } catch { return null; }
+  const expected = crypto.createHmac("sha256", STATE_SECRET).update(payload).digest("base64url");
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  const [uid, ts] = payload.split(":");
+  const userId = parseInt(uid, 10);
+  const tsNum = parseInt(ts, 10);
+  if (!Number.isFinite(userId) || !Number.isFinite(tsNum)) return null;
+  if (Date.now() - tsNum > STATE_MAX_AGE_MS) return null;
+  return { userId, ts: tsNum };
+}
+
 function popupResultHtml(success: boolean, msg: string, platform: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>${platform}</title>
 <style>body{font-family:-apple-system,Inter,sans-serif;background:#FDFCF8;color:#1E1650;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center;padding:20px}
@@ -517,6 +560,213 @@ export function registerOAuthRoutes(app: Express, requireAuth: any) {
   });
 
   // ===================================================================
+  // INSTAGRAM (first-class endpoints)
+  // Instagram publishing uses the Meta Graph API and requires an Instagram
+  // *Business* or *Creator* account that is linked to a Facebook Page. We
+  // therefore drive the same Facebook login dialog but under explicit
+  // Instagram route names, request only the IG-relevant permissions, and on
+  // callback enumerate every Page \u2192 linked IG account, storing each as its
+  // own `instagram` social_connection.
+  //
+  //   Start:    POST /api/social/instagram/oauth-start
+  //   Callback: GET  /api/social/instagram/oauth/callback
+  //
+  // Production redirect (register in Meta App \u2192 Facebook Login \u2192 Settings):
+  //   https://www.toolsyourway.com/api/social/instagram/oauth/callback
+  // Local redirect:
+  //   http://localhost:5000/api/social/instagram/oauth/callback
+  // ===================================================================
+  const IG_GRAPH_VERSION = "v19.0";
+  const IG_SCOPES = [
+    "instagram_basic",
+    "instagram_content_publish",
+    "pages_show_list",
+    "pages_read_engagement",
+    "business_management",
+  ].join(",");
+
+  // Resolve Meta app credentials. Prefer the existing FACEBOOK_APP_ID /
+  // FACEBOOK_APP_SECRET names this repo already uses, but accept the
+  // META_APP_ID / META_APP_SECRET aliases too.
+  function metaCreds(): { appId?: string; appSecret?: string } {
+    return {
+      appId: process.env.FACEBOOK_APP_ID || process.env.META_APP_ID,
+      appSecret: process.env.FACEBOOK_APP_SECRET || process.env.META_APP_SECRET,
+    };
+  }
+
+  app.post("/api/social/instagram/oauth-start", requireAuth, (req: Request, res: Response) => {
+    const { appId } = metaCreds();
+    if (!appId) {
+      return res.status(400).json({
+        message: "FACEBOOK_APP_ID (or META_APP_ID) not configured",
+        configured: false,
+      });
+    }
+    const state = signState(req.user!.id);
+    const redirectUri = `${baseUrl(req)}/api/social/instagram/oauth/callback`;
+    const authUrl = `https://www.facebook.com/${IG_GRAPH_VERSION}/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(IG_SCOPES)}&state=${state}&response_type=code`;
+    res.json({ authUrl, configured: true });
+  });
+
+  app.get("/api/social/instagram/oauth/callback", async (req: Request, res: Response) => {
+    try {
+      const { code, state, error, error_description } = req.query as any;
+      if (error) return res.type("html").send(popupResultHtml(false, error_description || error, "Instagram"));
+      if (!code) return res.type("html").send(popupResultHtml(false, "No authorization code", "Instagram"));
+
+      const verified = verifyState(String(state));
+      const userId = verified?.userId || (req.isAuthenticated() ? req.user!.id : undefined);
+      if (!userId) return res.type("html").send(popupResultHtml(false, "Session expired \u2014 please retry", "Instagram"));
+
+      const { appId, appSecret } = metaCreds();
+      if (!appId || !appSecret) {
+        return res.type("html").send(popupResultHtml(false, "Meta app not configured", "Instagram"));
+      }
+      const redirectUri = `${baseUrl(req)}/api/social/instagram/oauth/callback`;
+
+      // 1. Exchange code \u2192 short-lived user token
+      const tokenUrl = `https://graph.facebook.com/${IG_GRAPH_VERSION}/oauth/access_token?client_id=${appId}&client_secret=${appSecret}&redirect_uri=${encodeURIComponent(redirectUri)}&code=${encodeURIComponent(String(code))}`;
+      const tokenRes = await fetch(tokenUrl);
+      if (!tokenRes.ok) {
+        console.error("Instagram token exchange failed:", await tokenRes.text());
+        return res.type("html").send(popupResultHtml(false, "Token exchange failed", "Instagram"));
+      }
+      const tokenData: any = await tokenRes.json();
+      let userToken: string = tokenData.access_token;
+      let expiresIn: number = tokenData.expires_in || 3600;
+
+      // 2. Exchange short-lived \u2192 long-lived user token (~60 days)
+      try {
+        const llUrl = `https://graph.facebook.com/${IG_GRAPH_VERSION}/oauth/access_token?grant_type=fb_exchange_token&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${encodeURIComponent(userToken)}`;
+        const llRes = await fetch(llUrl);
+        if (llRes.ok) {
+          const ll: any = await llRes.json();
+          if (ll.access_token) {
+            userToken = ll.access_token;
+            expiresIn = ll.expires_in || 5184000;
+          }
+        } else {
+          console.warn("Instagram long-lived token exchange failed:", await llRes.text());
+        }
+      } catch (e) {
+        console.warn("Instagram long-lived token exchange error:", e);
+      }
+      const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
+
+      // 3. Enumerate Pages \u2192 linked Instagram Business/Creator accounts.
+      // Page access tokens derived from a long-lived user token are
+      // effectively long-lived, and are what IG publishing must be signed with.
+      const pagesRes = await fetch(`https://graph.facebook.com/${IG_GRAPH_VERSION}/me/accounts?fields=id,name,access_token,picture.width(200).height(200),instagram_business_account{id,username,profile_picture_url,followers_count,name}&access_token=${userToken}`);
+      if (!pagesRes.ok) {
+        console.error("Instagram pages fetch failed:", await pagesRes.text());
+        return res.type("html").send(popupResultHtml(false, "Could not read your Facebook Pages \u2014 grant Pages permissions", "Instagram"));
+      }
+      const pagesData: any = await pagesRes.json();
+      const pages = pagesData.data || [];
+      const pagesWithIG = pages.filter((p: any) => p.instagram_business_account);
+
+      if (pagesWithIG.length === 0) {
+        return res.type("html").send(popupResultHtml(
+          false,
+          "No Instagram Business/Creator account found. Convert your IG account to Business or Creator and link it to a Facebook Page, then retry.",
+          "Instagram",
+        ));
+      }
+
+      // 4. Store every linked IG account as its own connection. The most
+      // recently saved row "wins" as the active accountId; the full set is
+      // mirrored into `pages` so the user can switch via the selection endpoint.
+      const igList = pagesWithIG.map((p: any) => {
+        const ig = p.instagram_business_account;
+        return {
+          id: ig.id,
+          username: ig.username,
+          name: ig.name || ig.username,
+          profilePictureUrl: ig.profile_picture_url || null,
+          followersCount: ig.followers_count ?? null,
+          pageId: p.id,
+          pageName: p.name,
+          pageAccessToken: p.access_token,
+        };
+      });
+
+      const primary = igList[0];
+      await storage.connectSocial({
+        userId,
+        platform: "instagram",
+        accountId: primary.id,
+        accountName: `@${primary.username}`,
+        displayName: primary.name,
+        profilePictureUrl: primary.profilePictureUrl,
+        profileUrl: `https://instagram.com/${primary.username}`,
+        accountType: "business",
+        followerCount: primary.followersCount,
+        accessToken: primary.pageAccessToken, // page token signs IG publish calls
+        pageId: primary.pageId,
+        pageName: primary.pageName,
+        authVersion: "oauth2",
+        expiresAt,
+        // Persist all linked IG accounts so the user can switch between them.
+        pages: JSON.stringify(igList.map((i: typeof primary) => ({
+          id: i.id,
+          name: `@${i.username}`,
+          type: "instagram",
+          username: i.username,
+          pictureUrl: i.profilePictureUrl,
+          pageId: i.pageId,
+          pageName: i.pageName,
+          accessToken: i.pageAccessToken,
+        }))),
+      });
+
+      const msg = igList.length === 1
+        ? `Connected: @${primary.username}`
+        : `Connected ${igList.length} Instagram accounts. Active: @${primary.username}.`;
+      res.type("html").send(popupResultHtml(true, msg, "Instagram"));
+    } catch (e: any) {
+      console.error("Instagram callback error:", e);
+      res.type("html").send(popupResultHtml(false, e.message || "Unknown error", "Instagram"));
+    }
+  });
+
+  // Switch the active Instagram account when the user has multiple linked
+  // accounts. Promotes the chosen account (from the stored `pages` set) to
+  // the connection's active accountId/accessToken/pageId fields.
+  app.post("/api/social/instagram/select-account", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { accountId } = req.body as any;
+      if (!accountId) return res.status(400).json({ message: "accountId is required" });
+
+      const conns = await storage.getSocialConnections(req.user!.id);
+      const ig: any = conns.find((c: any) => c.platform === "instagram");
+      if (!ig) return res.status(404).json({ message: "Instagram not connected", needsConnect: true });
+
+      const accounts = ig.pages ? JSON.parse(ig.pages) : [];
+      const chosen = accounts.find((a: any) => a.id === accountId);
+      if (!chosen) return res.status(404).json({ message: "Account not found among linked Instagram accounts" });
+
+      await storage.connectSocial({
+        userId: req.user!.id,
+        platform: "instagram",
+        accountId: chosen.id,
+        accountName: chosen.name,
+        displayName: chosen.username || chosen.name,
+        profilePictureUrl: chosen.pictureUrl || null,
+        profileUrl: chosen.username ? `https://instagram.com/${chosen.username}` : undefined,
+        accountType: "business",
+        accessToken: chosen.accessToken,
+        pageId: chosen.pageId,
+        pageName: chosen.pageName,
+        pages: ig.pages,
+      });
+      res.json({ success: true, accountId: chosen.id, username: chosen.username });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message || "Account selection failed" });
+    }
+  });
+
+  // ===================================================================
   // PUBLISHING ENDPOINTS \u2014 the actual sends
   // ===================================================================
 
@@ -540,48 +790,142 @@ export function registerOAuthRoutes(app: Express, requireAuth: any) {
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
-  // Instagram: post a single image to feed (Instagram Graph API)
+  // Instagram publishing (Instagram Graph API). Supports:
+  //   - single image feed post  (image_url)
+  //   - carousel of 2–10 images  (imageUrls[])
+  //   - reel / video             (videoUrl, media_type=REELS)
+  // Meta FETCHES the asset from the supplied URL, so it MUST be a publicly
+  // reachable HTTPS URL — internal/private/localhost URLs will fail. We
+  // validate that up front and return an actionable error instead of a raw
+  // Graph API rejection.
+  const IG_PUBLISH_VERSION = "v19.0";
+
+  // Meta must be able to fetch the asset, so the URL has to be public HTTPS.
+  // Reuse the SSRF guard (rejects localhost / private IPs) and additionally
+  // require https + a non-local hostname.
+  function requirePublicHttpsUrl(url: string): string | null {
+    const unsafe = isUnsafeUrl(url);
+    if (unsafe) return unsafe;
+    let u: URL;
+    try { u = new URL(url); } catch { return "Invalid URL"; }
+    if (u.protocol !== "https:") return "Instagram requires a public HTTPS URL (http:// is not accepted by Meta)";
+    const host = u.hostname.toLowerCase();
+    if (!host.includes(".") || host.endsWith(".local")) {
+      return "Instagram needs a publicly reachable media URL — this host is not resolvable by Meta";
+    }
+    return null;
+  }
+
+  async function igCreateContainer(igUserId: string, accessToken: string, params: Record<string, string>): Promise<string> {
+    const r = await fetch(`https://graph.facebook.com/${IG_PUBLISH_VERSION}/${igUserId}/media`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ ...params, access_token: accessToken }).toString(),
+    });
+    if (!r.ok) throw new Error(`IG container failed: ${(await r.text()).slice(0, 300)}`);
+    const j: any = await r.json();
+    if (!j.id) throw new Error("IG container returned no id");
+    return j.id;
+  }
+
+  // Poll a container's status_code until FINISHED (needed for video/reels and
+  // recommended before publishing carousel children).
+  async function igWaitForContainer(containerId: string, accessToken: string, maxWaitMs = 90_000): Promise<void> {
+    const deadline = Date.now() + maxWaitMs;
+    while (Date.now() < deadline) {
+      const r = await fetch(`https://graph.facebook.com/${IG_PUBLISH_VERSION}/${containerId}?fields=status_code,status&access_token=${encodeURIComponent(accessToken)}`);
+      if (!r.ok) throw new Error(`IG container status check failed: ${(await r.text()).slice(0, 200)}`);
+      const j: any = await r.json();
+      if (j.status_code === "FINISHED") return;
+      if (j.status_code === "ERROR" || j.status_code === "EXPIRED") {
+        throw new Error(`IG media processing ${j.status_code}: ${j.status || ""}`);
+      }
+      await new Promise(res => setTimeout(res, 3000));
+    }
+    throw new Error("IG media processing timed out");
+  }
+
+  async function igPublish(igUserId: string, accessToken: string, creationId: string): Promise<string> {
+    const r = await fetch(`https://graph.facebook.com/${IG_PUBLISH_VERSION}/${igUserId}/media_publish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ creation_id: creationId, access_token: accessToken }).toString(),
+    });
+    if (!r.ok) throw new Error(`IG publish failed: ${(await r.text()).slice(0, 300)}`);
+    const j: any = await r.json();
+    return j.id;
+  }
+
   app.post("/api/publish/instagram-post", requireAuth, async (req: Request, res: Response) => {
     try {
-      const { imageUrl, caption } = req.body as any;
-      if (!imageUrl) return res.status(400).json({ message: "imageUrl required (must be public HTTPS URL)" });
+      const { imageUrl, imageUrls, videoUrl, caption } = req.body as {
+        imageUrl?: string;
+        imageUrls?: string[];
+        videoUrl?: string;
+        caption?: string;
+      };
 
       const conns = await storage.getSocialConnections(req.user!.id);
-      const ig = conns.find((c: any) => c.platform === "instagram" && c.status === "connected" && c.accessToken && c.accountId);
-      if (!ig?.accessToken) return res.status(400).json({ message: "Connect Instagram first (via Facebook)", needsConnect: true });
+      const ig: any = conns.find((c: any) => c.platform === "instagram" && c.status === "connected" && c.accessToken && c.accountId);
+      if (!ig?.accessToken) return res.status(400).json({ message: "Connect Instagram first (Business/Creator account linked to a Facebook Page)", needsConnect: true });
 
-      // Step 1: Create media container
-      const containerRes = await fetch(`https://graph.facebook.com/v19.0/${ig.accountId}/media`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          image_url: imageUrl,
-          caption: caption || "",
-          access_token: ig.accessToken,
-        }).toString(),
-      });
-      if (!containerRes.ok) {
-        const errText = await containerRes.text();
-        return res.status(400).json({ message: `IG container failed: ${errText.slice(0, 200)}` });
-      }
-      const container: any = await containerRes.json();
+      const igUserId = ig.accountId;
+      const token = ig.accessToken;
+      const cap = caption || "";
 
-      // Step 2: Publish container
-      const publishRes = await fetch(`https://graph.facebook.com/v19.0/${ig.accountId}/media_publish`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          creation_id: container.id,
-          access_token: ig.accessToken,
-        }).toString(),
-      });
-      if (!publishRes.ok) {
-        const errText = await publishRes.text();
-        return res.status(400).json({ message: `IG publish failed: ${errText.slice(0, 200)}` });
+      // Normalize a carousel request: imageUrls[] of length >= 2.
+      const carousel = (imageUrls || []).filter(Boolean);
+
+      // ---- VIDEO / REEL ----
+      if (videoUrl) {
+        const bad = requirePublicHttpsUrl(videoUrl);
+        if (bad) return res.status(400).json({ message: `videoUrl rejected: ${bad}` });
+        const containerId = await igCreateContainer(igUserId, token, {
+          media_type: "REELS",
+          video_url: videoUrl,
+          caption: cap,
+        });
+        await igWaitForContainer(containerId, token);
+        const mediaId = await igPublish(igUserId, token, containerId);
+        return res.json({ success: true, mediaId, type: "reel", message: "Reel posted to Instagram" });
       }
-      const published: any = await publishRes.json();
-      res.json({ success: true, mediaId: published.id, message: "Posted to Instagram" });
-    } catch (e: any) { res.status(500).json({ message: e.message }); }
+
+      // ---- CAROUSEL (2–10 images) ----
+      if (carousel.length >= 2) {
+        if (carousel.length > 10) return res.status(400).json({ message: "Instagram carousels allow at most 10 items" });
+        for (const u of carousel) {
+          const bad = requirePublicHttpsUrl(u);
+          if (bad) return res.status(400).json({ message: `Carousel image rejected (${u.slice(0, 60)}): ${bad}` });
+        }
+        const childIds: string[] = [];
+        for (const u of carousel) {
+          const childId = await igCreateContainer(igUserId, token, { image_url: u, is_carousel_item: "true" });
+          childIds.push(childId);
+        }
+        const parentId = await igCreateContainer(igUserId, token, {
+          media_type: "CAROUSEL",
+          caption: cap,
+          children: childIds.join(","),
+        });
+        await igWaitForContainer(parentId, token);
+        const mediaId = await igPublish(igUserId, token, parentId);
+        return res.json({ success: true, mediaId, type: "carousel", count: childIds.length, message: "Carousel posted to Instagram" });
+      }
+
+      // ---- SINGLE IMAGE ----
+      const single = imageUrl || carousel[0];
+      if (!single) {
+        return res.status(400).json({ message: "Provide imageUrl, imageUrls[] (2–10 for carousel), or videoUrl (reel)" });
+      }
+      const bad = requirePublicHttpsUrl(single);
+      if (bad) return res.status(400).json({ message: `imageUrl rejected: ${bad}` });
+      const containerId = await igCreateContainer(igUserId, token, { image_url: single, caption: cap });
+      const mediaId = await igPublish(igUserId, token, containerId);
+      res.json({ success: true, mediaId, type: "image", message: "Posted to Instagram" });
+    } catch (e: any) {
+      console.error("instagram-post error:", e);
+      res.status(400).json({ message: e.message || "Instagram publish failed" });
+    }
   });
 
   // ===================================================================

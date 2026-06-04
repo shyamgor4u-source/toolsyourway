@@ -1140,9 +1140,9 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
           oauthStart: (process.env.TWITTER_API_KEY || process.env.TWITTER_CLIENT_ID) ? "/api/social/twitter/oauth1-start" : undefined,
         },
         instagram: {
-          clientId: process.env.FACEBOOK_APP_ID,
-          // Instagram is connected via Facebook OAuth (Graph API)
-          oauthStart: process.env.FACEBOOK_APP_ID ? "/api/social/facebook/oauth-start" : undefined,
+          clientId: process.env.FACEBOOK_APP_ID || process.env.META_APP_ID,
+          // Instagram has its own first-class start/callback (Meta Graph API).
+          oauthStart: (process.env.FACEBOOK_APP_ID || process.env.META_APP_ID) ? "/api/social/instagram/oauth-start" : undefined,
         },
         youtube: {
           clientId: process.env.GOOGLE_CLIENT_ID,
