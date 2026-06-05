@@ -93,21 +93,38 @@ dedicated mobile redirect (e.g. `toolsyourway://oauth/callback` via
 `expo-auth-session` / `expo-web-browser`) and register that redirect URI in each
 provider console — without removing the existing web URIs.
 
-## Required store assets checklist
+## Play Store assets & submission checklist
 
-- [ ] App icon `1024×1024` (`assets/icon.png`)
-- [ ] Adaptive icon foreground (`assets/adaptive-icon.png`)
-- [ ] Splash image (`assets/splash.png`)
-- [ ] Feature graphic `1024×500` (Play Console)
-- [ ] Phone screenshots (min 2, `1080×1920` or similar)
-- [ ] Short description (≤ 80 chars) and full description
-- [ ] Privacy Policy URL → `https://www.toolsyourway.com/#/privacy`
-- [ ] Content rating questionnaire (Play Console)
-- [ ] Data safety form (Play Console)
-- [ ] Signed AAB uploaded to a Play track (internal/closed/production)
+Branded launch assets are generated from code (no external images) and live in
+[`store-assets/`](store-assets/README.md). Regenerate them any time with:
 
-> The `assets/` images are placeholders/missing in the repo. Add real branded
-> PNGs before building for release.
+```bash
+cd mobile
+python3 store-assets/source/brandkit.py   # needs Python 3 + Pillow
+```
+
+**Assets — done (branded, in repo):**
+- [x] App icon `1024×1024` (`assets/icon.png`)
+- [x] Adaptive icon foreground `1024×1024` (`assets/adaptive-icon.png`)
+- [x] Splash image (`assets/splash.png`)
+- [x] Web favicon (`assets/favicon.png`)
+- [x] Hi-res Play icon `512×512` (`store-assets/icon-512.png`)
+- [x] Feature graphic `1024×500` (`store-assets/feature-graphic.png`)
+- [x] Phone screenshots `1080×2160` ×5 (`store-assets/screenshots/`) — brand mockups
+- [x] Short + full description, release notes (`store-assets/listing.md`)
+- [x] Data safety draft (`store-assets/data-safety.md`)
+- [x] Content rating notes (`store-assets/content-rating.md`)
+
+**Still required in the Play Console before release:**
+- [ ] Create the app in Play Console (package `com.toolsyourway.app`)
+- [ ] Confirm the Privacy Policy URL is live → `https://www.toolsyourway.com/#/privacy`
+- [ ] Complete the Data safety form (use `store-assets/data-safety.md`; verify SDKs)
+- [ ] Complete the Content rating questionnaire (`store-assets/content-rating.md`)
+- [ ] Publish an account-deletion instructions URL and add it to Data safety
+- [ ] Set a real `expo.extra.eas.projectId` (`eas build:configure`) — placeholder now
+- [ ] (Recommended) Replace screenshot mockups with real device captures
+- [ ] Build a signed AAB (`eas build -p android --profile production`)
+- [ ] Upload to a Play track (internal → closed → production) and submit
 
 ## Project layout
 

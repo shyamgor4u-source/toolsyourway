@@ -4,6 +4,10 @@ export const colors = {
   primaryLight: "#2E2470",
   accent: "#7C5CFF",
   accentSoft: "#A78BFA",
+  // Brand accents: warm gold + teal (used on the app icon / splash / store art).
+  gold: "#F4C24A",
+  goldDeep: "#D9A227",
+  teal: "#2DD4BF",
   bg: "#0E0A24",
   surface: "#181233",
   surfaceAlt: "#221A45",
