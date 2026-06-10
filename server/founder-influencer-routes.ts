@@ -591,23 +591,38 @@ Mix content types. Aim for 1 post per day. Make topics SPECIFIC (not "share tips
     }
   });
 
-  // LinkedIn: post to user's feed (requires w_member_social scope)
+  // LinkedIn: post to user's profile feed or to a LinkedIn Page/Organization.
+  // Pass `destinationId` (an organization id) + `destinationType: "organization"`
+  // to publish as a Page; omit for the personal profile (default, backward-compatible).
+  // Requires w_member_social (profile) and w_organization_social (page) scopes.
   app.post("/api/publish/linkedin-post", requireAuth, requireActiveAccess, async (req: Request, res: Response) => {
     try {
-      const { text } = req.body as any;
+      const { text, destinationId, destinationType } = req.body as any;
       if (!text) return res.status(400).json({ message: "text required" });
       const connections = await storage.getSocialConnections(req.user!.id);
       const linkedin = connections.find((c: any) => c.platform === "linkedin" && c.status === "connected" && c.accessToken);
       if (!linkedin?.accessToken) {
         return res.status(400).json({ message: "Connect your LinkedIn account first (requires w_member_social scope).", needsConnect: true });
       }
-      // Fetch user's LinkedIn URN
-      const userInfoRes = await fetch("https://api.linkedin.com/v2/userinfo", {
-        headers: { Authorization: `Bearer ${linkedin.accessToken}` },
-      });
-      if (!userInfoRes.ok) return res.status(400).json({ message: "LinkedIn token expired. Reconnect." });
-      const userInfo: any = await userInfoRes.json();
-      const authorUrn = `urn:li:person:${userInfo.sub}`;
+
+      // Resolve the author URN: organization (Page) or person (profile).
+      const asOrganization = destinationType === "organization" || destinationType === "page";
+      let authorUrn: string;
+      if (asOrganization) {
+        const orgId = String(destinationId || "").replace(/^urn:li:organization:/, "");
+        if (!orgId) {
+          return res.status(400).json({ message: "destinationId (LinkedIn organization id) required to post to a Page." });
+        }
+        authorUrn = `urn:li:organization:${orgId}`;
+      } else {
+        // Fetch user's LinkedIn URN
+        const userInfoRes = await fetch("https://api.linkedin.com/v2/userinfo", {
+          headers: { Authorization: `Bearer ${linkedin.accessToken}` },
+        });
+        if (!userInfoRes.ok) return res.status(400).json({ message: "LinkedIn token expired. Reconnect." });
+        const userInfo: any = await userInfoRes.json();
+        authorUrn = `urn:li:person:${userInfo.sub}`;
+      }
 
       const postRes = await fetch("https://api.linkedin.com/v2/ugcPosts", {
         method: "POST",
@@ -645,7 +660,11 @@ Mix content types. Aim for 1 post per day. Make topics SPECIFIC (not "share tips
   // here. `mediaIds` (already-uploaded ids) can be passed for the first tweet.
   app.post("/api/publish/twitter-post", requireAuth, requireActiveAccess, async (req: Request, res: Response) => {
     try {
-      const { text, thread, mediaIds } = req.body as any; // thread = array of tweets
+      const { text, thread, mediaIds, destinationType } = req.body as any; // thread = array of tweets
+      // X has no Page concept — only the connected profile can post.
+      if (destinationType && destinationType !== "profile") {
+        return res.status(400).json({ message: "X / Twitter only supports posting to your profile. Pages are not available." });
+      }
       const connections = await storage.getSocialConnections(req.user!.id);
       const twitter = connections.find((c: any) => c.platform === "twitter" && c.status === "connected" && c.accessToken);
       if (!twitter?.accessToken) {

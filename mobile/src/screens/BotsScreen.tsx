@@ -1,3 +1,7 @@
+// TODO(marketing): surface Marketing Bot publish-destination selection here.
+// Consume GET /api/social/destinations and POST /api/social/destinations/defaults
+// to let users pick profile / page / channel targets per platform.
+// See docs/SOCIAL_DESTINATIONS.md.
 import React, { useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { Screen } from "../components/Screen";

@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { useState } from "react";
 import {
@@ -22,6 +23,7 @@ import {
   AlertCircle, Globe, Calendar, Zap, Play, Pause,
   IndianRupee, Scale, Search, Headphones, Plus, Trash2, Loader2,
   ImageIcon, Film, Sparkles, Mic, Download, Radio, Lock, Crown, RotateCcw,
+  Send, Building2, User as UserIcon, Tv, Save,
 } from "lucide-react";
 import { Link as WLink } from "wouter";
 
@@ -340,10 +342,16 @@ export default function BotDetailPage() {
 
   const schedulePost = useMutation({
     mutationFn: async () => {
+      // Map the platform label shown in the composer to its connection key
+      // so we can attach the user's selected destinations for that platform.
+      const platformKey = mktPlatform.toLowerCase().includes("linkedin") ? "linkedin"
+        : mktPlatform.toLowerCase().includes("instagram") ? "instagram"
+        : "twitter";
       await apiRequest("POST", "/api/bots/marketing/schedule", {
         content: mktGenerated,
         platform: mktPlatform,
         scheduledFor: new Date().toISOString(),
+        destinationIds: effectiveSelected[platformKey] || [],
       });
     },
     onSuccess: () => {
@@ -517,6 +525,66 @@ export default function BotDetailPage() {
     },
     enabled: botType === "marketing",
   });
+
+  // ── Publish Destinations (profile / page / channel selection) ──────────────
+  interface DestCapabilities { canPostText: boolean; canPostImage: boolean; canPostVideo: boolean; canPostCarousel: boolean; }
+  interface Destination {
+    platform: string; destinationId: string; accountId: string | null;
+    destinationType: string; displayName: string; handle: string | null;
+    pageName: string | null; profilePictureUrl: string | null; connected: boolean;
+    capabilities: DestCapabilities; selectedByDefault: boolean; note?: string;
+  }
+  interface PlatformDestinations {
+    platform: string; label: string; connected: boolean;
+    supportsProfile: boolean; supportsPage: boolean;
+    destinations: Destination[]; note?: string;
+  }
+
+  const { data: destinationsData } = useQuery<{ platforms: PlatformDestinations[] }>({
+    queryKey: ["/api/social/destinations"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/social/destinations");
+      return res.json();
+    },
+    enabled: botType === "marketing",
+  });
+
+  // Selected destination IDs per platform. Initialized from server defaults
+  // the first time data arrives; afterwards the user controls it.
+  const [selectedDest, setSelectedDest] = useState<Record<string, string[]> | null>(null);
+  const effectiveSelected: Record<string, string[]> = (() => {
+    if (selectedDest) return selectedDest;
+    const init: Record<string, string[]> = {};
+    for (const p of destinationsData?.platforms || []) {
+      init[p.platform] = p.destinations.filter((d) => d.selectedByDefault).map((d) => d.destinationId);
+    }
+    return init;
+  })();
+
+  const toggleDestination = (platform: string, id: string) => {
+    setSelectedDest((prev) => {
+      const base = prev || effectiveSelected;
+      const current = base[platform] || [];
+      const next = current.includes(id) ? current.filter((x) => x !== id) : [...current, id];
+      return { ...base, [platform]: next };
+    });
+  };
+
+  const saveDestinations = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/social/destinations/defaults", { destinations: effectiveSelected });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/social/destinations"] });
+      toast({ title: "Destinations saved", description: "The Marketing Bot will publish to your selected destinations." });
+    },
+    onError: (err: any) => {
+      toast({ title: "Save failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const totalSelectedDestinations = Object.values(effectiveSelected).reduce((sum, ids) => sum + ids.length, 0);
 
   const [pagePickerOpen, setPagePickerOpen] = useState(false);
   const [pagePickerPlatform, setPagePickerPlatform] = useState("");
@@ -880,6 +948,126 @@ export default function BotDetailPage() {
                               </CardContent>
                             </Card>
                           )}
+                        </CardContent>
+                      </Card>
+
+                      {/* Publish Destinations — choose profile / page / channel */}
+                      <Card data-testid="card-publish-destinations">
+                        <CardHeader className="pb-3">
+                          <CardTitle className="text-base flex items-center gap-2">
+                            <Send className="h-4 w-4" /> Publish Destinations
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          <p className="text-xs text-muted-foreground">
+                            Choose where this bot can publish by default. You can select multiple destinations
+                            when supported (e.g. your LinkedIn profile and one or more LinkedIn Pages).
+                          </p>
+
+                          <div className="space-y-3">
+                            {(destinationsData?.platforms || []).map((p) => {
+                              const sp = SOCIAL_PLATFORMS.find((s) => s.key === p.platform);
+                              const selectedIds = effectiveSelected[p.platform] || [];
+                              return (
+                                <div
+                                  key={p.platform}
+                                  className="rounded-xl border border-border overflow-hidden"
+                                  data-testid={`destinations-${p.platform}`}
+                                >
+                                  <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 bg-muted/30 border-b border-border">
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      <span className="text-lg flex-shrink-0">{sp?.icon || "🌐"}</span>
+                                      <span className="text-sm font-semibold truncate">{p.label}</span>
+                                      {p.connected ? (
+                                        <Badge variant="outline" className="text-[9px] border-green-300 text-green-700 bg-green-50">
+                                          Connected
+                                        </Badge>
+                                      ) : (
+                                        <Badge variant="outline" className="text-[9px] text-muted-foreground">
+                                          Not connected
+                                        </Badge>
+                                      )}
+                                    </div>
+                                    {!p.connected && (
+                                      <Button
+                                        variant="outline" size="sm" className="text-[10px] h-6 flex-shrink-0"
+                                        onClick={() => startConnect(p.platform)}
+                                        disabled={connectSocial.isPending}
+                                        data-testid={`destinations-connect-${p.platform}`}
+                                      >Connect</Button>
+                                    )}
+                                  </div>
+
+                                  <div className="p-3 space-y-2">
+                                    {p.connected && p.destinations.length > 0 ? (
+                                      p.destinations.map((d) => {
+                                        const checked = selectedIds.includes(d.destinationId);
+                                        const TypeIcon = d.destinationType === "channel" ? Tv
+                                          : (d.destinationType === "profile" ? UserIcon : Building2);
+                                        return (
+                                          <label
+                                            key={d.destinationId}
+                                            className={`flex items-start gap-3 p-2.5 rounded-lg border cursor-pointer transition-colors ${
+                                              checked ? "border-primary/50 bg-primary/5" : "border-border hover:bg-muted/40"
+                                            }`}
+                                            data-testid={`destination-option-${d.destinationId}`}
+                                          >
+                                            <Checkbox
+                                              checked={checked}
+                                              onCheckedChange={() => toggleDestination(p.platform, d.destinationId)}
+                                              className="mt-0.5"
+                                              data-testid={`destination-checkbox-${d.destinationId}`}
+                                            />
+                                            <div className="flex-1 min-w-0">
+                                              <div className="flex items-center gap-1.5">
+                                                <TypeIcon className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                                                <span className="text-sm font-medium truncate">{d.displayName}</span>
+                                              </div>
+                                              <div className="flex flex-wrap gap-1 mt-1.5">
+                                                {d.capabilities.canPostText && <Badge variant="secondary" className="text-[8px] px-1.5 py-0">Text</Badge>}
+                                                {d.capabilities.canPostImage && <Badge variant="secondary" className="text-[8px] px-1.5 py-0">Image</Badge>}
+                                                {d.capabilities.canPostVideo && <Badge variant="secondary" className="text-[8px] px-1.5 py-0">Video</Badge>}
+                                                {d.capabilities.canPostCarousel && <Badge variant="secondary" className="text-[8px] px-1.5 py-0">Carousel</Badge>}
+                                              </div>
+                                            </div>
+                                          </label>
+                                        );
+                                      })
+                                    ) : p.connected ? (
+                                      <p className="text-[11px] text-muted-foreground py-1">
+                                        No publishable destinations detected yet. Re-connect or select a Page in Settings.
+                                      </p>
+                                    ) : (
+                                      <p className="text-[11px] text-muted-foreground py-1">
+                                        Connect {p.label} to choose where the bot publishes.
+                                      </p>
+                                    )}
+                                    {p.note && (
+                                      <p className="text-[10px] text-muted-foreground/80 pt-1">{p.note}</p>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          <div className="flex items-center justify-between pt-1">
+                            <span className="text-[11px] text-muted-foreground" data-testid="destinations-selected-count">
+                              {totalSelectedDestinations} destination{totalSelectedDestinations === 1 ? "" : "s"} selected
+                            </span>
+                            <Button
+                              size="sm"
+                              onClick={() => saveDestinations.mutate()}
+                              disabled={saveDestinations.isPending}
+                              data-testid="button-save-destinations"
+                            >
+                              {saveDestinations.isPending ? (
+                                <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Saving…</>
+                              ) : (
+                                <><Save className="h-3.5 w-3.5 mr-1.5" /> Save Destinations</>
+                              )}
+                            </Button>
+                          </div>
                         </CardContent>
                       </Card>
 

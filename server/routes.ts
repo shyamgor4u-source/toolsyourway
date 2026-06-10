@@ -15,6 +15,7 @@ import { storage, dbReady } from "./storage";
 import { registerSchema, loginSchema } from "@shared/schema";
 import { setupAuth } from "./auth";
 import { getBaseUrl } from "./config";
+import { buildDestinations, SUPPORTED_PLATFORMS } from "./social-destinations";
 
 const MemoryStore = createMemoryStore(session);
 
@@ -1358,6 +1359,76 @@ p{color:#666;font-size:14px;margin:0}
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ message: "Disconnect failed" });
+    }
+  });
+
+  // ============================================================
+  // SOCIAL DESTINATIONS (Marketing Bot — profile / page / channel selection)
+  // ============================================================
+  // Read the Marketing Bot's saved default destination selections.
+  // Stored inside botConfigs(config) as { destinations: { [platform]: string[] } }.
+  async function getMarketingDestinationDefaults(userId: number): Promise<Record<string, string[]>> {
+    const configs = await storage.getBotConfigs(userId);
+    const marketing = configs.find((c: any) => c.botType === "marketing");
+    if (!marketing?.config) return {};
+    try {
+      const parsed = JSON.parse(marketing.config);
+      const d = parsed?.destinations;
+      return d && typeof d === "object" ? d : {};
+    } catch {
+      return {};
+    }
+  }
+
+  // GET normalized destinations grouped by platform for the current user.
+  app.get("/api/social/destinations", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const connections = await storage.getSocialConnections(req.user!.id);
+      const defaults = await getMarketingDestinationDefaults(req.user!.id);
+      const platforms = buildDestinations(connections as any, defaults);
+      res.json({ platforms });
+    } catch (err: any) {
+      console.error("Destinations fetch error:", err);
+      res.status(500).json({ message: "Failed to fetch destinations" });
+    }
+  });
+
+  // Save Marketing Bot default destination selections per platform.
+  // Body: { destinations: { linkedin: ["urn:...","page_1"], twitter: ["123"] } }
+  // No secrets stored — only destination IDs the user chose.
+  app.post("/api/social/destinations/defaults", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const incoming = req.body?.destinations;
+      if (!incoming || typeof incoming !== "object" || Array.isArray(incoming)) {
+        return res.status(400).json({ message: "destinations object is required" });
+      }
+      // Sanitize: only string platform keys -> array of string ids.
+      const clean: Record<string, string[]> = {};
+      for (const [platform, ids] of Object.entries(incoming)) {
+        if (!SUPPORTED_PLATFORMS.includes(platform)) continue;
+        if (!Array.isArray(ids)) continue;
+        clean[platform] = ids.filter((x) => typeof x === "string").map(String).slice(0, 50);
+      }
+
+      const configs = await storage.getBotConfigs(req.user!.id);
+      const marketing = configs.find((c: any) => c.botType === "marketing");
+      let configObj: any = {};
+      if (marketing?.config) {
+        try { configObj = JSON.parse(marketing.config); } catch { configObj = {}; }
+      }
+      configObj.destinations = clean;
+
+      await storage.upsertBotConfig({
+        userId: req.user!.id,
+        botType: "marketing",
+        status: marketing?.status || "inactive",
+        config: JSON.stringify(configObj),
+      } as any);
+
+      res.json({ success: true, destinations: clean });
+    } catch (err: any) {
+      console.error("Save destination defaults error:", err);
+      res.status(500).json({ message: "Failed to save destinations" });
     }
   });
 
