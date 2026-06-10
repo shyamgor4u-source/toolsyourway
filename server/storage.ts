@@ -98,6 +98,8 @@ async function initDb() {
       status TEXT NOT NULL DEFAULT 'scheduled',
       scheduled_for TEXT,
       published_at TEXT,
+      destinations TEXT,
+      destination_platform TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE TABLE IF NOT EXISTS prospects (
@@ -255,6 +257,9 @@ async function initDb() {
     "ALTER TABLE social_connections ADD COLUMN oauth1_token TEXT",
     "ALTER TABLE social_connections ADD COLUMN oauth1_token_secret TEXT",
     "ALTER TABLE social_connections ADD COLUMN auth_version TEXT DEFAULT 'oauth2'",
+    // Per-post destination persistence (Marketing Bot)
+    "ALTER TABLE scheduled_posts ADD COLUMN destinations TEXT",
+    "ALTER TABLE scheduled_posts ADD COLUMN destination_platform TEXT",
   ];
   for (const sql of migrations) {
     try { await client.execute(sql); } catch (e: any) {

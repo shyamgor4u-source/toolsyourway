@@ -147,6 +147,14 @@ export const scheduledPosts = sqliteTable("scheduled_posts", {
   status: text("status").notNull().default("scheduled"), // scheduled | published | failed
   scheduledFor: text("scheduled_for"),
   publishedAt: text("published_at"),
+  // Per-post destination snapshot. JSON array of normalized destinations the
+  // post targets, captured at creation time so the record stays auditable even
+  // if the connection/page is later changed or removed. Never contains tokens.
+  // Shape per entry: { platform, destinationId, accountId, destinationType,
+  //                    displayName, handle, pageName, capabilities }
+  destinations: text("destinations"), // JSON array (nullable for legacy rows)
+  // Denormalized first-destination type for cheap filtering/display.
+  destinationPlatform: text("destination_platform"),
   createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
 });
 

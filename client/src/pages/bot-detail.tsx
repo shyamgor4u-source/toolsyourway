@@ -344,8 +344,12 @@ export default function BotDetailPage() {
     mutationFn: async () => {
       // Map the platform label shown in the composer to its connection key
       // so we can attach the user's selected destinations for that platform.
-      const platformKey = mktPlatform.toLowerCase().includes("linkedin") ? "linkedin"
-        : mktPlatform.toLowerCase().includes("instagram") ? "instagram"
+      const p = mktPlatform.toLowerCase();
+      const platformKey = p.includes("linkedin") ? "linkedin"
+        : p.includes("instagram") ? "instagram"
+        : p.includes("facebook") ? "facebook"
+        : p.includes("youtube") ? "youtube"
+        : p.includes("tiktok") ? "tiktok"
         : "twitter";
       await apiRequest("POST", "/api/bots/marketing/schedule", {
         content: mktGenerated,
@@ -1313,10 +1317,24 @@ export default function BotDetailPage() {
                           ) : (
                             <div className="divide-y divide-border">
                               {scheduledPosts.map((post: any, i: number) => (
-                                <div key={post.id ?? i} className="flex items-start gap-3 px-5 py-3.5">
+                                <div key={post.id ?? i} className="flex items-start gap-3 px-5 py-3.5" data-testid={`scheduled-post-${post.id ?? i}`}>
                                   <div className="flex-1 min-w-0">
                                     <p className="text-sm text-foreground truncate">{post.content?.slice(0, 80)}{(post.content?.length ?? 0) > 80 ? "…" : ""}</p>
                                     <p className="text-xs text-muted-foreground mt-0.5">{post.scheduledFor ? new Date(post.scheduledFor).toLocaleString() : ""}</p>
+                                    {Array.isArray(post.destinations) && post.destinations.length > 0 && (
+                                      <div className="flex flex-wrap gap-1 mt-1.5" data-testid={`post-destinations-${post.id ?? i}`}>
+                                        {post.destinations.map((d: any, di: number) => (
+                                          <Badge
+                                            key={d.destinationId ?? di}
+                                            variant="secondary"
+                                            className="text-[10px] font-normal"
+                                            data-testid={`post-destination-chip-${d.destinationId ?? di}`}
+                                          >
+                                            {d.displayName || d.pageName || d.handle || d.destinationId}
+                                          </Badge>
+                                        ))}
+                                      </div>
+                                    )}
                                   </div>
                                   <div className="flex gap-1.5 flex-shrink-0">
                                     {post.platform && <Badge variant="outline" className="text-[10px]">{post.platform}</Badge>}

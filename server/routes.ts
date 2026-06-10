@@ -15,7 +15,7 @@ import { storage, dbReady } from "./storage";
 import { registerSchema, loginSchema } from "@shared/schema";
 import { setupAuth } from "./auth";
 import { getBaseUrl } from "./config";
-import { buildDestinations, SUPPORTED_PLATFORMS } from "./social-destinations";
+import { buildDestinations, SUPPORTED_PLATFORMS, resolveDestinationMap } from "./social-destinations";
 
 const MemoryStore = createMemoryStore(session);
 
@@ -933,22 +933,72 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
     }
   });
 
+  // Map a free-text platform label (as shown in the composer) to a connection key.
+  function platformKeyFromLabel(platform: string): string {
+    const p = String(platform || "").toLowerCase();
+    if (p.includes("linkedin")) return "linkedin";
+    if (p.includes("instagram")) return "instagram";
+    if (p.includes("facebook")) return "facebook";
+    if (p.includes("youtube")) return "youtube";
+    if (p.includes("tiktok")) return "tiktok";
+    if (p.includes("twitter") || p === "x" || p.includes("x /")) return "twitter";
+    return SUPPORTED_PLATFORMS.includes(p) ? p : "twitter";
+  }
+
   app.post("/api/bots/marketing/schedule", requireAuth, async (req: Request, res: Response) => {
     try {
-      const { content, platform, scheduledFor } = req.body;
+      const { content, platform, scheduledFor, destinations, destinationIds } = req.body;
       if (!content || !platform) {
         return res.status(400).json({ message: "content and platform are required" });
       }
 
+      const userId = req.user!.id;
+      const platformKey = platformKeyFromLabel(platform);
+
+      // Build the per-platform selection map. Precedence:
+      //   1. explicit `destinations` map { platform: string[] }
+      //   2. explicit `destinationIds` array (applied to this post's platform)
+      //   3. Marketing Bot saved defaults (resolved at creation time)
+      let selection: Record<string, string[]> = {};
+      if (destinations && typeof destinations === "object" && !Array.isArray(destinations)) {
+        for (const [pk, ids] of Object.entries(destinations)) {
+          if (SUPPORTED_PLATFORMS.includes(pk) && Array.isArray(ids)) {
+            selection[pk] = (ids as unknown[]).filter((x) => typeof x === "string").map(String);
+          }
+        }
+      } else if (Array.isArray(destinationIds)) {
+        selection[platformKey] = destinationIds.filter((x: unknown) => typeof x === "string").map(String);
+      } else {
+        // Fall back to saved Marketing Bot defaults for this post's platform.
+        const defaults = await getMarketingDestinationDefaults(userId);
+        if (Array.isArray(defaults[platformKey]) && defaults[platformKey].length) {
+          selection[platformKey] = defaults[platformKey];
+        }
+      }
+
+      const connections = await storage.getSocialConnections(userId);
+      const { resolved, errors } = resolveDestinationMap(connections as any, selection);
+
+      // Reject explicit selections that fail validation (disconnected / unsupported type).
+      // Defaults that no longer resolve are tolerated (best-effort) — explicit intent is not.
+      const wasExplicit =
+        (destinations && typeof destinations === "object" && !Array.isArray(destinations)) ||
+        Array.isArray(destinationIds);
+      if (wasExplicit && errors.length) {
+        return res.status(400).json({ message: errors.join(" "), errors });
+      }
+
       const post = await storage.createScheduledPost({
-        userId: req.user!.id,
+        userId,
         content,
         platform,
         status: "scheduled",
         scheduledFor: scheduledFor || null,
-      });
+        destinations: resolved.length ? JSON.stringify(resolved) : null,
+        destinationPlatform: resolved.length ? resolved[0].platform : platformKey,
+      } as any);
 
-      res.json(post);
+      res.json({ ...post, destinations: resolved });
     } catch (err: any) {
       console.error("Schedule post error:", err);
       res.status(500).json({ message: err.message || "Failed to schedule post" });
@@ -958,7 +1008,19 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
   app.get("/api/bots/marketing/posts", requireAuth, async (req: Request, res: Response) => {
     try {
       const posts = await storage.getScheduledPosts(req.user!.id);
-      res.json(posts);
+      // Parse the stored destinations JSON for each post so clients get
+      // structured destination data rather than a raw string.
+      const withDestinations = posts.map((p: any) => {
+        let parsed: any[] = [];
+        if (p.destinations) {
+          try {
+            const d = JSON.parse(p.destinations);
+            if (Array.isArray(d)) parsed = d;
+          } catch { /* leave empty on malformed legacy data */ }
+        }
+        return { ...p, destinations: parsed };
+      });
+      res.json(withDestinations);
     } catch (err: any) {
       console.error("Get posts error:", err);
       res.status(500).json({ message: err.message || "Failed to fetch posts" });

@@ -200,6 +200,123 @@ export function buildPlatformDestinations(
 
 export const SUPPORTED_PLATFORMS = ["linkedin", "facebook", "instagram", "youtube", "twitter", "tiktok"];
 
+// ============================================================
+// PER-POST DESTINATION PERSISTENCE
+// ============================================================
+
+// The minimal, token-free snapshot stored on each scheduled/published post.
+// Captures enough to audit what was selected even if the connection later
+// changes. Never includes access tokens or secrets.
+export interface PersistedDestination {
+  platform: string;
+  destinationId: string;
+  accountId: string | null;
+  destinationType: DestinationType;
+  displayName: string;
+  handle: string | null;
+  pageName: string | null;
+  capabilities: DestinationCapabilities;
+  // Snapshot of connection state at selection time for auditing.
+  connectedAtSelection: boolean;
+}
+
+export interface ResolveDestinationsResult {
+  resolved: PersistedDestination[];
+  errors: string[];
+}
+
+function toPersisted(d: Destination): PersistedDestination {
+  return {
+    platform: d.platform,
+    destinationId: d.destinationId,
+    accountId: d.accountId,
+    destinationType: d.destinationType,
+    displayName: d.displayName,
+    handle: d.handle,
+    pageName: d.pageName,
+    capabilities: d.capabilities,
+    connectedAtSelection: d.connected,
+  };
+}
+
+/**
+ * Resolve explicit destination IDs for a single platform against the user's
+ * live connection, validating them with the same platform rules used by the
+ * selector. Returns normalized snapshots plus any validation errors.
+ *
+ * - Unknown / unavailable IDs => error (e.g. disconnected or removed page).
+ * - Destination types not supported by the platform => error.
+ */
+export function resolveDestinations(
+  platformKey: string,
+  conn: SocialConnection | undefined,
+  ids: string[],
+): ResolveDestinationsResult {
+  const errors: string[] = [];
+  const resolved: PersistedDestination[] = [];
+
+  if (!SUPPORTED_PLATFORMS.includes(platformKey)) {
+    return { resolved, errors: [`Unsupported platform: ${platformKey}`] };
+  }
+
+  const label = PLATFORM_LABEL[platformKey] || platformKey;
+  if (!conn || conn.status !== "connected") {
+    return {
+      resolved,
+      errors: ids.length
+        ? [`${label} is not connected — connect it before publishing to its destinations.`]
+        : [],
+    };
+  }
+
+  // Build the available destinations once; match requested ids against them.
+  const available = buildPlatformDestinations(platformKey, conn, []).destinations;
+  const byId = new Map(available.map((d) => [d.destinationId, d]));
+  const shape = PLATFORM_SHAPE[platformKey] || { profile: true, page: false, pageType: "profile" as DestinationType };
+
+  for (const id of ids) {
+    const match = byId.get(id);
+    if (!match) {
+      errors.push(`${label}: destination "${id}" is unavailable or disconnected.`);
+      continue;
+    }
+    // Validate the destination type is allowed for this platform.
+    const typeAllowed =
+      (match.destinationType === "profile" && shape.profile) ||
+      (match.destinationType !== "profile" && shape.page) ||
+      // instagram "profile" is modeled as business_account
+      (platformKey === "instagram" && match.destinationType === "business_account");
+    if (!typeAllowed) {
+      errors.push(`${label}: ${match.destinationType} destinations are not supported.`);
+      continue;
+    }
+    resolved.push(toPersisted(match));
+  }
+
+  return { resolved, errors };
+}
+
+/**
+ * Resolve a flat map of platform -> destinationIds (e.g. Marketing Bot
+ * defaults or an explicit per-post selection) into a single normalized list.
+ * Collects validation errors across all platforms.
+ */
+export function resolveDestinationMap(
+  connections: SocialConnection[],
+  selection: Record<string, string[]>,
+): ResolveDestinationsResult {
+  const resolved: PersistedDestination[] = [];
+  const errors: string[] = [];
+  for (const [platformKey, ids] of Object.entries(selection)) {
+    if (!Array.isArray(ids) || ids.length === 0) continue;
+    const conn = connections.find((c) => c.platform === platformKey);
+    const r = resolveDestinations(platformKey, conn, ids);
+    resolved.push(...r.resolved);
+    errors.push(...r.errors);
+  }
+  return { resolved, errors };
+}
+
 /**
  * Build the full grouped destinations response for a user.
  * `defaults` maps platform -> array of selected destinationIds.
