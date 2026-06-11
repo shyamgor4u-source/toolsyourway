@@ -16,7 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
-import { useState } from "react";
+import { useState, useRef } from "react";
 import {
   Bot, Megaphone, Database, Mail, TrendingUp, Users,
   ArrowLeft, Settings, Activity, BarChart3, Clock, CheckCircle2,
@@ -625,6 +625,30 @@ export default function BotDetailPage() {
   const [connectPopupOpen, setConnectPopupOpen] = useState(false);
   const [connectStep, setConnectStep] = useState<"confirm" | "loading" | "pages" | "done">("confirm");
 
+  // Holds the OAuth popup opened synchronously on click. Browsers block
+  // window.open() if it is called after an await (not a direct user gesture),
+  // so we open a blank popup in the click handler and navigate it once the
+  // server returns the auth URL.
+  const oauthPopupRef = useRef<Window | null>(null);
+
+  const refreshConnectionState = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/social/connections"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/social/destinations"] });
+  };
+
+  // apiRequest throws Error("<status>: <body>"); pull out the human message.
+  const extractErrorMessage = (err: any): string => {
+    const raw = String(err?.message || "");
+    const stripped = raw.replace(/^\d{3}:\s*/, "");
+    try {
+      const parsed = JSON.parse(stripped);
+      if (parsed && typeof parsed.message === "string") return parsed.message;
+    } catch {
+      // not JSON — fall through
+    }
+    return stripped || raw;
+  };
+
   const startConnect = (platform: string) => {
     setConnectingPlatform(platform);
     setConnectStep("confirm");
@@ -634,6 +658,9 @@ export default function BotDetailPage() {
   const confirmConnect = () => {
     if (!connectingPlatform) return;
     setConnectStep("loading");
+    // Open the popup NOW, inside the user gesture, so it is not blocked.
+    // It is navigated to the real auth URL once the server responds.
+    oauthPopupRef.current = window.open("about:blank", "socialAuth", "width=600,height=700,left=200,top=100");
     connectSocial.mutate(connectingPlatform);
   };
 
@@ -651,16 +678,31 @@ export default function BotDetailPage() {
     },
     onSuccess: (data) => {
       if (data.redirect) {
-        // Real OAuth — open in popup window + listen for postMessage from callback
-        const popup = window.open(data.redirect, "socialAuth", "width=600,height=700,left=200,top=100");
+        // Real OAuth — navigate the pre-opened popup + listen for postMessage from callback
+        const popup = oauthPopupRef.current;
+        if (popup && !popup.closed) {
+          popup.location.href = data.redirect;
+        } else {
+          // Popup was blocked or closed — fall back to a fresh window (may be blocked).
+          oauthPopupRef.current = window.open(data.redirect, "socialAuth", "width=600,height=700,left=200,top=100");
+        }
+        if (!oauthPopupRef.current) {
+          toast({
+            title: "Popup blocked",
+            description: "Allow popups for this site, then click Connect again.",
+            variant: "destructive",
+          });
+          setConnectPopupOpen(false);
+          return;
+        }
 
         const messageHandler = (evt: MessageEvent) => {
           if (evt.data?.type === "linkedin-oauth" || evt.data?.type === "oauth-complete") {
             window.removeEventListener("message", messageHandler);
-            queryClient.invalidateQueries({ queryKey: ["/api/social/connections"] });
+            refreshConnectionState();
             setConnectPopupOpen(false);
             if (evt.data.success) {
-              toast({ title: "Connected", description: "Account linked successfully." });
+              toast({ title: "Connected", description: "Account linked successfully. Loading your destinations…" });
             } else {
               toast({ title: "Connection failed", description: "Please try again.", variant: "destructive" });
             }
@@ -669,28 +711,37 @@ export default function BotDetailPage() {
         window.addEventListener("message", messageHandler);
 
         const timer = setInterval(() => {
-          if (popup?.closed) {
+          if (oauthPopupRef.current?.closed) {
             clearInterval(timer);
             window.removeEventListener("message", messageHandler);
-            queryClient.invalidateQueries({ queryKey: ["/api/social/connections"] });
+            refreshConnectionState();
             setConnectPopupOpen(false);
           }
         }, 500);
       } else if (data.needsPageSelection && data.pages) {
+        // No popup needed for this path — discard the blank one we opened.
+        oauthPopupRef.current?.close();
         setPagePickerPlatform(data.connection?.platform || "");
         setPagePickerPages(data.pages);
         setConnectStep("pages");
-        queryClient.invalidateQueries({ queryKey: ["/api/social/connections"] });
+        refreshConnectionState();
       } else {
-        queryClient.invalidateQueries({ queryKey: ["/api/social/connections"] });
+        oauthPopupRef.current?.close();
+        refreshConnectionState();
         setConnectStep("done");
         setTimeout(() => setConnectPopupOpen(false), 1500);
         toast({ title: `${data.connection?.platform} connected`, description: data.message });
       }
     },
     onError: (err: any) => {
+      // Close the blank popup we opened so the user is not left with a dead tab.
+      oauthPopupRef.current?.close();
       setConnectPopupOpen(false);
-      toast({ title: "Connection failed", description: err.message, variant: "destructive" });
+      toast({
+        title: "Connection failed",
+        description: extractErrorMessage(err) || "Social credentials are not configured. Contact the administrator.",
+        variant: "destructive",
+      });
     },
   });
 
@@ -711,8 +762,33 @@ export default function BotDetailPage() {
       await apiRequest("POST", "/api/social/disconnect", { platform });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/social/connections"] });
+      refreshConnectionState();
       toast({ title: "Disconnected" });
+    },
+  });
+
+  // Re-discover LinkedIn Pages using the stored token (no re-auth).
+  const refreshLinkedInPages = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/social/linkedin/refresh-pages");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      refreshConnectionState();
+      if (data.pageCount > 0) {
+        toast({ title: "LinkedIn Pages updated", description: `Found ${data.pageCount} Page${data.pageCount === 1 ? "" : "s"}.` });
+      } else if (data.requiresPermission) {
+        toast({
+          title: "No LinkedIn Pages found",
+          description: "The LinkedIn app needs organization admin permission to list Pages.",
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: "No LinkedIn Pages found", description: "Make sure you're an admin of a LinkedIn Page." });
+      }
+    },
+    onError: (err: any) => {
+      toast({ title: "Refresh failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -1072,6 +1148,32 @@ export default function BotDetailPage() {
                                         Connect {p.label} to choose where the bot publishes.
                                       </p>
                                     )}
+
+                                    {/* LinkedIn Pages helper: connected profile but no Pages discovered. */}
+                                    {p.connected && p.platform === "linkedin"
+                                      && p.supportsPage
+                                      && !p.destinations.some((d) => d.destinationType !== "profile") && (
+                                      <div
+                                        className="mt-1 rounded-lg border border-amber-200 bg-amber-50/60 p-2.5"
+                                        data-testid="linkedin-pages-empty"
+                                      >
+                                        <p className="text-[11px] text-amber-800">
+                                          No LinkedIn Pages found. Make sure your LinkedIn account is an admin of the Page
+                                          and the LinkedIn app has organization permissions.
+                                        </p>
+                                        <Button
+                                          variant="outline" size="sm" className="text-[10px] h-6 mt-2"
+                                          onClick={() => refreshLinkedInPages.mutate()}
+                                          disabled={refreshLinkedInPages.isPending}
+                                          data-testid="button-refresh-linkedin-pages"
+                                        >
+                                          {refreshLinkedInPages.isPending ? (
+                                            <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Checking…</>
+                                          ) : "Refresh Pages"}
+                                        </Button>
+                                      </div>
+                                    )}
+
                                     {p.note && (
                                       <p className="text-[10px] text-muted-foreground/80 pt-1">{p.note}</p>
                                     )}

@@ -16,9 +16,26 @@ import { registerSchema, loginSchema } from "@shared/schema";
 import { setupAuth } from "./auth";
 import { getBaseUrl } from "./config";
 import { buildDestinations, SUPPORTED_PLATFORMS, resolveDestinationMap } from "./social-destinations";
+import { discoverLinkedInOrganizations } from "./publish-service";
 import { isPublishWorkerEnabled } from "./marketing-publish-worker";
 
 const MemoryStore = createMemoryStore(session);
+
+// LinkedIn OAuth scopes. Personal posting always uses w_member_social.
+// When the LinkedIn app has been approved for organization (Page) admin
+// access, set LINKEDIN_ORG_SCOPE=1 (or to the exact scope string) so the
+// connect flow also requests it and can discover the user's LinkedIn Pages.
+function linkedinScope(): string {
+  const base = "openid profile w_member_social email";
+  const orgEnv = process.env.LINKEDIN_ORG_SCOPE;
+  if (!orgEnv) return base;
+  // Allow either an opt-in flag ("1"/"true") using sensible defaults, or an
+  // explicit space-separated scope string supplied by the operator.
+  const orgScopes = /^(1|true|yes)$/i.test(orgEnv.trim())
+    ? "r_organization_admin rw_organization_admin"
+    : orgEnv.trim();
+  return `${base} ${orgScopes}`;
+}
 
 function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (req.isAuthenticated()) return next();
@@ -1279,7 +1296,7 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
         linkedin: {
           clientId: process.env.LINKEDIN_CLIENT_ID,
           authUrl: process.env.LINKEDIN_CLIENT_ID
-            ? `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${process.env.LINKEDIN_CLIENT_ID}&redirect_uri=${encodeURIComponent(linkedinRedirect)}&scope=${encodeURIComponent("openid profile w_member_social email")}&state=${linkedinState}`
+            ? `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${process.env.LINKEDIN_CLIENT_ID}&redirect_uri=${encodeURIComponent(linkedinRedirect)}&scope=${encodeURIComponent(linkedinScope())}&state=${linkedinState}`
             : undefined,
         },
         facebook: {
@@ -1312,6 +1329,16 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
 
       const config = oauthConfig[platform];
 
+      // LinkedIn must use real OAuth — there is no demo posting path for it.
+      // Surface a clear, actionable error instead of silently demo-connecting
+      // so the Connect button shows a visible reason when creds are missing.
+      if (platform === "linkedin" && !process.env.LINKEDIN_CLIENT_ID) {
+        return res.status(400).json({
+          message: "LinkedIn isn't configured yet. Add LINKEDIN_CLIENT_ID and LINKEDIN_CLIENT_SECRET in the server environment to enable connecting.",
+          configured: false,
+        });
+      }
+
       // If real OAuth is configured, return the auth URL for redirect
       if (config?.authUrl) {
         return res.json({ redirect: config.authUrl });
@@ -1338,11 +1365,13 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
       // Placeholder platform avatars (used when no real profile pic available from OAuth)
       const platformAvatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(accountName || req.user!.name)}&background=1E1650&color=fff&size=128&bold=true`;
 
-      // MVP mode: create connection record directly (for demo/testing, non-admin)
-      const hasPages = ["linkedin", "facebook", "youtube"].includes(platform);
+      // MVP mode: create connection record directly (for demo/testing, non-admin).
+      // LinkedIn is intentionally excluded — it always uses real OAuth (guarded
+      // above), so we never fabricate LinkedIn Pages here.
+      const hasPages = ["facebook", "youtube"].includes(platform);
       const demoPages = hasPages ? JSON.stringify([
-        { id: `page_1_${Date.now()}`, name: `${req.user!.name}'s ${platform === "linkedin" ? "Company" : "Business"} Page`, type: "page", pictureUrl: platformAvatar },
-        { id: `page_2_${Date.now()}`, name: `${platform === "linkedin" ? "My Startup" : "Brand Page"}`, type: "page", pictureUrl: platformAvatar },
+        { id: `page_1_${Date.now()}`, name: `${req.user!.name}'s Business Page`, type: "page", pictureUrl: platformAvatar },
+        { id: `page_2_${Date.now()}`, name: `Brand Page`, type: "page", pictureUrl: platformAvatar },
         { id: `profile_${Date.now()}`, name: `${req.user!.name} (Personal Profile)`, type: "profile", pictureUrl: platformAvatar },
       ]) : undefined;
 
@@ -1447,6 +1476,12 @@ p{color:#666;font-size:14px;margin:0}
       }
       const profile: any = await profileRes.json();
 
+      // Best-effort: discover LinkedIn Pages (organizations) the member admins.
+      // Only succeeds if the app/token has an organization scope; otherwise
+      // returns no pages (and a permission note) without failing the connect.
+      const orgDiscovery = await discoverLinkedInOrganizations(accessToken);
+      const pagesJson = orgDiscovery.pages.length ? JSON.stringify(orgDiscovery.pages) : null;
+
       // Store connection with real token and real profile pic
       await storage.connectSocial({
         userId,
@@ -1457,12 +1492,16 @@ p{color:#666;font-size:14px;margin:0}
         profilePictureUrl: profile.picture || null,
         profileUrl: `https://www.linkedin.com/in/${profile.sub}`,
         accountType: "profile",
+        pages: pagesJson,
         accessToken,
         refreshToken: refreshToken || null,
         expiresAt: new Date(Date.now() + expiresIn * 1000).toISOString(),
       });
 
-      res.type("html").send(renderPopupResult(true, `Welcome, ${profile.name}. You can now post to LinkedIn from ToolsYourWay.`));
+      const pageMsg = orgDiscovery.pages.length
+        ? ` Found ${orgDiscovery.pages.length} LinkedIn Page${orgDiscovery.pages.length === 1 ? "" : "s"}.`
+        : "";
+      res.type("html").send(renderPopupResult(true, `Welcome, ${profile.name}. You can now post to LinkedIn from ToolsYourWay.${pageMsg}`));
     } catch (e: any) {
       console.error("LinkedIn callback error:", e);
       res.type("html").send(`<!doctype html><html><body><p>Error: ${e.message}</p><script>window.close();</script></body></html>`);
@@ -1476,7 +1515,7 @@ p{color:#666;font-size:14px;margin:0}
     }
     const state = Buffer.from(`${req.user!.id}:${Date.now()}:${Math.random().toString(36).slice(2)}`).toString("base64");
     const redirectUri = `${getBaseUrl(req)}/api/social/linkedin/callback`;
-    const authUrl = `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${process.env.LINKEDIN_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent("openid profile w_member_social email")}&state=${state}`;
+    const authUrl = `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${process.env.LINKEDIN_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(linkedinScope())}&state=${state}`;
     res.json({ authUrl, state, configured: true });
   });
 
@@ -1537,6 +1576,34 @@ p{color:#666;font-size:14px;margin:0}
       return {};
     }
   }
+
+  // Re-run LinkedIn Page (organization) discovery for the connected user using
+  // the stored token — no re-auth required. Updates the stored `pages` so the
+  // destinations list refreshes. Never returns tokens.
+  app.post("/api/social/linkedin/refresh-pages", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const connections = await storage.getSocialConnections(req.user!.id);
+      const linkedin = connections.find((c: any) => c.platform === "linkedin" && c.status === "connected");
+      if (!linkedin?.accessToken) {
+        return res.status(400).json({ message: "Connect LinkedIn first.", connected: false });
+      }
+      const discovery = await discoverLinkedInOrganizations(linkedin.accessToken);
+      await storage.connectSocial({
+        userId: req.user!.id,
+        platform: "linkedin",
+        pages: discovery.pages.length ? JSON.stringify(discovery.pages) : null,
+      });
+      res.json({
+        success: true,
+        pageCount: discovery.pages.length,
+        requiresPermission: discovery.requiresPermission,
+        note: discovery.note,
+      });
+    } catch (err: any) {
+      console.error("LinkedIn refresh-pages error:", err);
+      res.status(500).json({ message: "Failed to refresh LinkedIn Pages" });
+    }
+  });
 
   // GET normalized destinations grouped by platform for the current user.
   app.get("/api/social/destinations", requireAuth, async (req: Request, res: Response) => {
