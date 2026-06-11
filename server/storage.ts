@@ -260,6 +260,12 @@ async function initDb() {
     // Per-post destination persistence (Marketing Bot)
     "ALTER TABLE scheduled_posts ADD COLUMN destinations TEXT",
     "ALTER TABLE scheduled_posts ADD COLUMN destination_platform TEXT",
+    // Scheduled publish worker bookkeeping (Marketing Bot). All token-free.
+    "ALTER TABLE scheduled_posts ADD COLUMN approved_at TEXT",
+    "ALTER TABLE scheduled_posts ADD COLUMN publish_attempts INTEGER DEFAULT 0",
+    "ALTER TABLE scheduled_posts ADD COLUMN last_attempt_at TEXT",
+    "ALTER TABLE scheduled_posts ADD COLUMN last_error TEXT",
+    "ALTER TABLE scheduled_posts ADD COLUMN publish_results TEXT",
   ];
   for (const sql of migrations) {
     try { await client.execute(sql); } catch (e: any) {
@@ -295,8 +301,15 @@ export interface IStorage {
   upsertBotConfig(data: InsertBotConfig): Promise<BotConfig>;
 
   getScheduledPosts(userId: number): Promise<ScheduledPost[]>;
+  getScheduledPost(id: number): Promise<ScheduledPost | undefined>;
   createScheduledPost(data: InsertScheduledPost): Promise<ScheduledPost>;
   updateScheduledPost(id: number, data: Partial<InsertScheduledPost>): Promise<ScheduledPost | undefined>;
+  // Worker: due posts that are approved and past their scheduled time.
+  getDuePostsForPublish(nowIso: string, limit?: number): Promise<ScheduledPost[]>;
+  // Worker: atomically claim a post (approved -> publishing) so a concurrent
+  // run cannot double-publish. Returns the claimed row, or undefined if it was
+  // already claimed / no longer approved.
+  claimPostForPublish(id: number): Promise<ScheduledPost | undefined>;
 
   getInvoices(userId: number): Promise<Invoice[]>;
   createInvoice(data: InsertInvoice): Promise<Invoice>;
@@ -397,6 +410,11 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(scheduledPosts).where(eq(scheduledPosts.userId, userId));
   }
 
+  async getScheduledPost(id: number) {
+    const rows = await db.select().from(scheduledPosts).where(eq(scheduledPosts.id, id));
+    return rows[0];
+  }
+
   async createScheduledPost(data: InsertScheduledPost) {
     const rows = await db.insert(scheduledPosts).values(data).returning();
     return rows[0];
@@ -404,6 +422,29 @@ export class DatabaseStorage implements IStorage {
 
   async updateScheduledPost(id: number, data: Partial<InsertScheduledPost>) {
     const rows = await db.update(scheduledPosts).set(data).where(eq(scheduledPosts.id, id)).returning();
+    return rows[0];
+  }
+
+  async getDuePostsForPublish(nowIso: string, limit = 25) {
+    // Approved + due (no scheduled time means "send asap once approved").
+    const rows = await db
+      .select()
+      .from(scheduledPosts)
+      .where(sql`${scheduledPosts.status} = 'approved'
+        AND (${scheduledPosts.scheduledFor} IS NULL OR ${scheduledPosts.scheduledFor} <= ${nowIso})`)
+      .limit(limit);
+    return rows;
+  }
+
+  async claimPostForPublish(id: number) {
+    // Conditional update is the lock: only an `approved` row transitions to
+    // `publishing`. On a single-instance deploy this is effectively atomic;
+    // even with overlapping in-process ticks only one update will match.
+    const rows = await db
+      .update(scheduledPosts)
+      .set({ status: "publishing", lastAttemptAt: new Date().toISOString() })
+      .where(sql`${scheduledPosts.id} = ${id} AND ${scheduledPosts.status} = 'approved'`)
+      .returning();
     return rows[0];
   }
 

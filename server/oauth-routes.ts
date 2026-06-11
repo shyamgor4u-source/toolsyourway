@@ -6,6 +6,7 @@ import type { Express, Request, Response } from "express";
 import crypto from "crypto";
 import { storage } from "./storage";
 import { getBaseUrl } from "./config";
+import { publishFacebookPage } from "./publish-service";
 
 // In-memory PKCE verifier store (key = state, value = code_verifier)
 // For production, move to Redis or DB. Acceptable for MVP.
@@ -1210,31 +1211,20 @@ export function registerOAuthRoutes(app: Express, requireAuth: any) {
   // Facebook Page post
   app.post("/api/publish/facebook-page", requireAuth, async (req: Request, res: Response) => {
     try {
-      const { text, link, pageId } = req.body as any;
+      const { text, pageId } = req.body as any;
       if (!text) return res.status(400).json({ message: "text required" });
 
       const conns = await storage.getSocialConnections(req.user!.id);
       const fb = conns.find((c: any) => c.platform === "facebook" && c.status === "connected");
       if (!fb) return res.status(400).json({ message: "Connect Facebook first", needsConnect: true });
 
-      const pages = fb.pages ? JSON.parse(fb.pages) : [];
-      const targetPage = pageId ? pages.find((p: any) => p.id === pageId) : pages[0];
-      if (!targetPage?.accessToken) return res.status(400).json({ message: "No Facebook Page found on this account" });
-
-      const body: any = { message: text, access_token: targetPage.accessToken };
-      if (link) body.link = link;
-
-      const postRes = await fetch(`https://graph.facebook.com/v19.0/${targetPage.id}/feed`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams(body).toString(),
-      });
-      if (!postRes.ok) {
-        const errText = await postRes.text();
-        return res.status(400).json({ message: `FB post failed: ${errText.slice(0, 200)}` });
+      // `link` is not threaded through the shared helper (text-only feed post);
+      // the interactive UI rarely sends it and the worker never does.
+      const outcome = await publishFacebookPage(fb as any, text, pageId);
+      if (!outcome.ok) {
+        return res.status(outcome.code === "not_connected" ? 400 : 502).json({ message: outcome.message });
       }
-      const posted: any = await postRes.json();
-      res.json({ success: true, postId: posted.id, url: `https://facebook.com/${posted.id}` });
+      res.json({ success: true, postId: outcome.id, url: outcome.url });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 }

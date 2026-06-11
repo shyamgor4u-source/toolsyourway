@@ -76,3 +76,13 @@ services:
         sync: false
       - key: REPLICATE_API_TOKEN
         sync: false
+      # Marketing scheduled publish worker. Social posting is IRREVERSIBLE, so
+      # this is OFF by default — a deploy never silently starts auto-posting.
+      # Flip to "true" in the Render dashboard ONLY after testing approval
+      # gating and confirming social credentials. See
+      # docs/marketing-publish-worker.md.
+      - key: ENABLE_MARKETING_PUBLISH_WORKER
+        value: "false"
+      # Poll interval (ms). Default 60000. Optional.
+      - key: MARKETING_PUBLISH_WORKER_INTERVAL_MS
+        value: "60000"

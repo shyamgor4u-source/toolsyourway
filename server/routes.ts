@@ -16,6 +16,7 @@ import { registerSchema, loginSchema } from "@shared/schema";
 import { setupAuth } from "./auth";
 import { getBaseUrl } from "./config";
 import { buildDestinations, SUPPORTED_PLATFORMS, resolveDestinationMap } from "./social-destinations";
+import { isPublishWorkerEnabled } from "./marketing-publish-worker";
 
 const MemoryStore = createMemoryStore(session);
 
@@ -1018,12 +1019,107 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
             if (Array.isArray(d)) parsed = d;
           } catch { /* leave empty on malformed legacy data */ }
         }
-        return { ...p, destinations: parsed };
+        let results: any[] = [];
+        if (p.publishResults) {
+          try {
+            const r = JSON.parse(p.publishResults);
+            if (Array.isArray(r)) results = r;
+          } catch { /* ignore malformed */ }
+        }
+        return { ...p, destinations: parsed, publishResults: results };
       });
       res.json(withDestinations);
     } catch (err: any) {
       console.error("Get posts error:", err);
       res.status(500).json({ message: err.message || "Failed to fetch posts" });
+    }
+  });
+
+  // Change a scheduled post's status. This is the approval gate for the
+  // publish worker: only `approved` posts that are due get auto-published.
+  // Allowed transitions (intentionally narrow):
+  //   approve : draft|scheduled|failed|partial_failed|cancelled -> approved
+  //   cancel  : any non-terminal                                -> cancelled
+  //   retry   : failed|partial_failed                           -> approved (clears prior results)
+  //   unapprove: approved                                       -> scheduled
+  app.post("/api/bots/marketing/posts/:id/status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const id = parseInt(String(req.params.id), 10);
+      const action = String(req.body?.action || "");
+      if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid post id" });
+
+      const post = await storage.getScheduledPost(id);
+      if (!post || post.userId !== req.user!.id) {
+        return res.status(404).json({ message: "Post not found" });
+      }
+      if (post.status === "publishing") {
+        return res.status(409).json({ message: "Post is currently being published — try again shortly." });
+      }
+
+      let patch: Record<string, any> | null = null;
+      switch (action) {
+        case "approve":
+          if (!["draft", "scheduled", "failed", "partial_failed", "cancelled"].includes(post.status)) {
+            return res.status(400).json({ message: `Cannot approve a post in status "${post.status}".` });
+          }
+          patch = { status: "approved", approvedAt: new Date().toISOString(), lastError: null };
+          break;
+        case "unapprove":
+          if (post.status !== "approved") {
+            return res.status(400).json({ message: `Only approved posts can be unapproved (status is "${post.status}").` });
+          }
+          patch = { status: "scheduled", approvedAt: null };
+          break;
+        case "cancel":
+          if (["published", "cancelled"].includes(post.status)) {
+            return res.status(400).json({ message: `Cannot cancel a post in status "${post.status}".` });
+          }
+          patch = { status: "cancelled" };
+          break;
+        case "retry":
+          if (!["failed", "partial_failed"].includes(post.status)) {
+            return res.status(400).json({ message: `Only failed posts can be retried (status is "${post.status}").` });
+          }
+          // Re-approve so the worker picks it up again; clear stale results.
+          patch = { status: "approved", approvedAt: new Date().toISOString(), lastError: null, publishResults: null };
+          break;
+        default:
+          return res.status(400).json({ message: "action must be one of: approve, unapprove, cancel, retry" });
+      }
+
+      const updated = await storage.updateScheduledPost(id, patch as any);
+      res.json({ ...updated, workerEnabled: isPublishWorkerEnabled() });
+    } catch (err: any) {
+      console.error("Post status change error:", err);
+      res.status(500).json({ message: err.message || "Failed to update post status" });
+    }
+  });
+
+  // DRY-RUN: report which of THIS USER's posts are approved + due for publish,
+  // WITHOUT publishing anything. Safe to call anytime; never contacts a social
+  // platform. Helps verify scheduling/approval before enabling the worker.
+  app.get("/api/bots/marketing/publish-status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const posts = await storage.getScheduledPosts(req.user!.id);
+      const nowMs = Date.now();
+      const isDue = (p: any) => !p.scheduledFor || new Date(p.scheduledFor).getTime() <= nowMs;
+      const counts: Record<string, number> = {};
+      for (const p of posts) counts[p.status] = (counts[p.status] || 0) + 1;
+      const dueApproved = posts.filter((p: any) => p.status === "approved" && isDue(p));
+      res.json({
+        workerEnabled: isPublishWorkerEnabled(),
+        intervalMs: parseInt(process.env.MARKETING_PUBLISH_WORKER_INTERVAL_MS || "60000", 10) || 60000,
+        statusCounts: counts,
+        dueNow: dueApproved.map((p: any) => ({
+          id: p.id,
+          platform: p.platform,
+          scheduledFor: p.scheduledFor,
+          destinationCount: (() => { try { return (JSON.parse(p.destinations || "[]") || []).length; } catch { return 0; } })(),
+        })),
+      });
+    } catch (err: any) {
+      console.error("Publish-status error:", err);
+      res.status(500).json({ message: err.message || "Failed to compute publish status" });
     }
   });
 

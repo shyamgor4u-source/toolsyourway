@@ -378,6 +378,32 @@ export default function BotDetailPage() {
     enabled: botType === "marketing",
   });
 
+  // Whether the auto-publish worker is enabled on the server (for UI hints).
+  const { data: publishStatus } = useQuery<{ workerEnabled: boolean }>({
+    queryKey: ["/api/bots/marketing/publish-status"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/bots/marketing/publish-status");
+      return res.json();
+    },
+    enabled: botType === "marketing",
+  });
+
+  const postStatusMutation = useMutation({
+    mutationFn: async ({ id, action }: { id: number; action: string }) => {
+      const res = await apiRequest("POST", `/api/bots/marketing/posts/${id}/status`, { action });
+      return res.json();
+    },
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/bots/marketing/posts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/bots/marketing/publish-status"] });
+      const verb = vars.action === "approve" ? "approved" : vars.action === "cancel" ? "cancelled" : vars.action === "retry" ? "queued for retry" : "updated";
+      toast({ title: `Post ${verb}`, description: vars.action === "approve" ? "It will publish at its scheduled time once the worker is enabled." : undefined });
+    },
+    onError: (err: any) => {
+      toast({ title: "Action failed", description: err.message, variant: "destructive" });
+    },
+  });
+
   // Image & Video generation state
   const [imgPrompt, setImgPrompt] = useState("");
   const [imgStyle, setImgStyle] = useState("photorealistic");
@@ -1308,6 +1334,11 @@ export default function BotDetailPage() {
                           <CardTitle className="text-base flex items-center gap-2">
                             <Calendar className="h-4 w-4" /> Scheduled Posts
                           </CardTitle>
+                          <p className="text-xs text-muted-foreground">
+                            {publishStatus?.workerEnabled
+                              ? "Auto-publish is ON. Approved posts publish automatically at their scheduled time."
+                              : "Auto-publish is OFF. Approved posts will only publish once an admin enables the publish worker."}
+                          </p>
                         </CardHeader>
                         <CardContent className="p-0">
                           {!scheduledPosts || scheduledPosts.length === 0 ? (
@@ -1316,8 +1347,24 @@ export default function BotDetailPage() {
                             </div>
                           ) : (
                             <div className="divide-y divide-border">
-                              {scheduledPosts.map((post: any, i: number) => (
-                                <div key={post.id ?? i} className="flex items-start gap-3 px-5 py-3.5" data-testid={`scheduled-post-${post.id ?? i}`}>
+                              {scheduledPosts.map((post: any, i: number) => {
+                                const statusBg: Record<string, string> = {
+                                  published: "#0D9E98",
+                                  approved: "#2563EB",
+                                  scheduled: "#C98A1A",
+                                  publishing: "#7C3AED",
+                                  partial_failed: "#D97706",
+                                  failed: "#DC2626",
+                                  cancelled: "#6B7280",
+                                };
+                                const busy = postStatusMutation.isPending;
+                                const canApprove = ["draft", "scheduled", "cancelled"].includes(post.status);
+                                const canCancel = !["published", "cancelled", "publishing"].includes(post.status);
+                                const canRetry = ["failed", "partial_failed"].includes(post.status);
+                                const canUnapprove = post.status === "approved";
+                                return (
+                                <div key={post.id ?? i} className="px-5 py-3.5" data-testid={`scheduled-post-${post.id ?? i}`}>
+                                  <div className="flex items-start gap-3">
                                   <div className="flex-1 min-w-0">
                                     <p className="text-sm text-foreground truncate">{post.content?.slice(0, 80)}{(post.content?.length ?? 0) > 80 ? "…" : ""}</p>
                                     <p className="text-xs text-muted-foreground mt-0.5">{post.scheduledFor ? new Date(post.scheduledFor).toLocaleString() : ""}</p>
@@ -1335,13 +1382,64 @@ export default function BotDetailPage() {
                                         ))}
                                       </div>
                                     )}
+                                    {Array.isArray(post.publishResults) && post.publishResults.length > 0 && (
+                                      <div className="mt-2 space-y-1" data-testid={`post-results-${post.id ?? i}`}>
+                                        {post.publishResults.map((r: any, ri: number) => (
+                                          <div key={ri} className="flex items-center gap-1.5 text-[11px]">
+                                            {r.ok ? <CheckCircle2 className="h-3 w-3 text-teal-600 flex-shrink-0" /> : <AlertCircle className="h-3 w-3 text-red-500 flex-shrink-0" />}
+                                            <span className="text-muted-foreground truncate">{r.displayName}:</span>
+                                            {r.ok ? (
+                                              r.url ? <a href={r.url} target="_blank" rel="noreferrer" className="text-teal-700 underline truncate">View post</a> : <span className="text-teal-700">posted</span>
+                                            ) : (
+                                              <span className="text-red-600 truncate">{r.error || "failed"}</span>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                    {post.lastError && !(Array.isArray(post.publishResults) && post.publishResults.length) && (
+                                      <p className="text-[11px] text-red-600 mt-1.5">{post.lastError}</p>
+                                    )}
                                   </div>
                                   <div className="flex gap-1.5 flex-shrink-0">
                                     {post.platform && <Badge variant="outline" className="text-[10px]">{post.platform}</Badge>}
-                                    {post.status && <Badge className="text-[10px]" style={{ background: post.status === "published" ? "#0D9E98" : post.status === "scheduled" ? "#C98A1A" : undefined }}>{post.status}</Badge>}
+                                    {post.status && <Badge className="text-[10px]" style={{ background: statusBg[post.status] }} data-testid={`post-status-${post.id ?? i}`}>{post.status}</Badge>}
                                   </div>
+                                  </div>
+                                  {(canApprove || canCancel || canRetry || canUnapprove) && (
+                                    <div className="flex gap-1.5 mt-2">
+                                      {canApprove && (
+                                        <Button size="sm" variant="outline" className="h-7 text-[11px]" disabled={busy}
+                                          onClick={() => postStatusMutation.mutate({ id: post.id, action: "approve" })}
+                                          data-testid={`post-approve-${post.id ?? i}`}>
+                                          <CheckCircle2 className="h-3 w-3 mr-1" /> Approve
+                                        </Button>
+                                      )}
+                                      {canUnapprove && (
+                                        <Button size="sm" variant="outline" className="h-7 text-[11px]" disabled={busy}
+                                          onClick={() => postStatusMutation.mutate({ id: post.id, action: "unapprove" })}
+                                          data-testid={`post-unapprove-${post.id ?? i}`}>
+                                          Unapprove
+                                        </Button>
+                                      )}
+                                      {canRetry && (
+                                        <Button size="sm" variant="outline" className="h-7 text-[11px]" disabled={busy}
+                                          onClick={() => postStatusMutation.mutate({ id: post.id, action: "retry" })}
+                                          data-testid={`post-retry-${post.id ?? i}`}>
+                                          <RotateCcw className="h-3 w-3 mr-1" /> Retry failed
+                                        </Button>
+                                      )}
+                                      {canCancel && (
+                                        <Button size="sm" variant="ghost" className="h-7 text-[11px] text-muted-foreground" disabled={busy}
+                                          onClick={() => postStatusMutation.mutate({ id: post.id, action: "cancel" })}
+                                          data-testid={`post-cancel-${post.id ?? i}`}>
+                                          Cancel
+                                        </Button>
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
-                              ))}
+                              );})}
                             </div>
                           )}
                         </CardContent>

@@ -4,6 +4,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { storage } from "./storage";
 import { Resend } from "resend";
+import { publishLinkedIn, publishTwitter } from "./publish-service";
 
 // ============================================================
 // VC / INVESTOR DIRECTORIES (pre-built, updateable)
@@ -605,50 +606,15 @@ Mix content types. Aim for 1 post per day. Make topics SPECIFIC (not "share tips
         return res.status(400).json({ message: "Connect your LinkedIn account first (requires w_member_social scope).", needsConnect: true });
       }
 
-      // Resolve the author URN: organization (Page) or person (profile).
       const asOrganization = destinationType === "organization" || destinationType === "page";
-      let authorUrn: string;
-      if (asOrganization) {
-        const orgId = String(destinationId || "").replace(/^urn:li:organization:/, "");
-        if (!orgId) {
-          return res.status(400).json({ message: "destinationId (LinkedIn organization id) required to post to a Page." });
-        }
-        authorUrn = `urn:li:organization:${orgId}`;
-      } else {
-        // Fetch user's LinkedIn URN
-        const userInfoRes = await fetch("https://api.linkedin.com/v2/userinfo", {
-          headers: { Authorization: `Bearer ${linkedin.accessToken}` },
-        });
-        if (!userInfoRes.ok) return res.status(400).json({ message: "LinkedIn token expired. Reconnect." });
-        const userInfo: any = await userInfoRes.json();
-        authorUrn = `urn:li:person:${userInfo.sub}`;
-      }
-
-      const postRes = await fetch("https://api.linkedin.com/v2/ugcPosts", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${linkedin.accessToken}`,
-          "Content-Type": "application/json",
-          "X-Restli-Protocol-Version": "2.0.0",
-        },
-        body: JSON.stringify({
-          author: authorUrn,
-          lifecycleState: "PUBLISHED",
-          specificContent: {
-            "com.linkedin.ugc.ShareContent": {
-              shareCommentary: { text },
-              shareMediaCategory: "NONE",
-            },
-          },
-          visibility: { "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC" },
-        }),
+      const outcome = await publishLinkedIn(linkedin as any, text, {
+        asOrganization,
+        organizationId: asOrganization ? destinationId : undefined,
       });
-      if (!postRes.ok) {
-        const errText = await postRes.text();
-        return res.status(postRes.status).json({ message: `LinkedIn error: ${errText.slice(0, 200)}` });
+      if (!outcome.ok) {
+        return res.status(outcome.code === "not_connected" ? 400 : 502).json({ message: outcome.message });
       }
-      const posted: any = await postRes.json();
-      res.json({ success: true, postId: posted.id, url: `https://www.linkedin.com/feed/update/${posted.id}` });
+      res.json({ success: true, postId: outcome.id, url: outcome.url });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }

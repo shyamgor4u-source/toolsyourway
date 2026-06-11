@@ -144,7 +144,17 @@ export const scheduledPosts = sqliteTable("scheduled_posts", {
   userId: integer("user_id").notNull().references(() => users.id),
   content: text("content").notNull(),
   platform: text("platform").notNull(),
-  status: text("status").notNull().default("scheduled"), // scheduled | published | failed
+  // Lifecycle status. The publish worker ONLY acts on `approved` posts that are
+  // due. Drafts / scheduled-but-unapproved posts are never auto-published.
+  //   draft           — not yet ready (legacy rows are migrated here, see storage.ts)
+  //   scheduled       — composed & time set, but NOT approved for auto-publish
+  //   approved        — explicitly approved by the user; worker will publish when due
+  //   publishing      — worker has claimed this row (in-flight lock)
+  //   published       — all destinations succeeded
+  //   partial_failed  — some destinations succeeded, some failed
+  //   failed          — no destination succeeded / fatal error
+  //   cancelled       — user cancelled; worker ignores it
+  status: text("status").notNull().default("draft"),
   scheduledFor: text("scheduled_for"),
   publishedAt: text("published_at"),
   // Per-post destination snapshot. JSON array of normalized destinations the
@@ -155,6 +165,14 @@ export const scheduledPosts = sqliteTable("scheduled_posts", {
   destinations: text("destinations"), // JSON array (nullable for legacy rows)
   // Denormalized first-destination type for cheap filtering/display.
   destinationPlatform: text("destination_platform"),
+  // Publish bookkeeping (all nullable / token-free).
+  approvedAt: text("approved_at"), // when the user approved it for publishing
+  publishAttempts: integer("publish_attempts").default(0), // worker run count
+  lastAttemptAt: text("last_attempt_at"), // last time the worker tried
+  lastError: text("last_error"), // last fatal/overall error message (truncated)
+  // JSON array of per-destination outcomes. Never contains tokens. Shape:
+  //   { platform, destinationId, displayName, ok, id?, url?, error?, at }
+  publishResults: text("publish_results"),
   createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
 });
 
