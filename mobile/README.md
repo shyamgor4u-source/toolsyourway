@@ -84,7 +84,7 @@ Play Billing vs. external-payment strategy is decided.
 
 The Android manifest registers an intent filter for the `toolsyourway://` scheme
 (see `app.json` → `android.intentFilters`). In-app routes are mapped in
-`src/navigation/RootNavigator.tsx` (e.g. `toolsyourway://approvals`).
+`src/navigation/RootNavigator.tsx` (e.g. `toolsyourway://marketing`).
 
 **OAuth redirect strategy (not yet wired):** the existing web OAuth callbacks
 (`/api/auth/google/callback`, `/api/social/*/callback`, etc.) redirect to web
@@ -136,22 +136,69 @@ mobile/
   src/
     api/client.ts          # base-URL resolution + fetch wrapper (cookie auth)
     api/auth.ts            # login/register/logout/me/dashboard calls
+    api/marketing.ts       # Marketing Bot destinations / posts / status / publish-status
     context/AuthContext.tsx
     navigation/RootNavigator.tsx   # bottom tabs + deep link config
-    components/            # Screen, Card, Button, Field, Pill
-    screens/               # Auth, Home, Bots, Manager, Approvals, Account
+    components/            # Screen, Card, Button, Field, Pill, Chip, LinkAction
+    screens/               # Auth, Home, Bots, Manager, Marketing, Account
     data/bots.ts           # bot/suite catalog
     theme.ts               # brand colors / spacing / typography
 ```
+
+## Marketing Bot (in-app)
+
+The **Marketing** tab (also reachable by tapping **Marketing / Social** on the
+Bots screen) wires the app to the backend's Marketing Bot publish workflow. It
+has two tabs and a worker-status banner, and pull-to-refresh throughout.
+
+**Publish Destinations** (`Destinations` tab)
+- Targets grouped by platform (LinkedIn, Facebook, Instagram, YouTube, X, TikTok)
+  with `CONNECTED` / `NOT CONNECTED` badges and per-platform notes.
+- Destination chips (profile / page / channel / business account) are toggleable;
+  each shows capability badges (Text / Image / Video / Carousel).
+- **Save default destinations** persists your selection via
+  `POST /api/social/destinations/defaults` (IDs only — no secrets).
+
+**Approvals** (`Approvals` tab)
+- Lists scheduled posts with a status badge, scheduled time, content preview,
+  destination chips, and per-destination publish results / errors.
+- Safe actions per status: **Approve**, **Unapprove**, **Cancel**, **Retry**
+  (failed). Actions that the backend would reject for the current status are
+  hidden, and `publishing` posts are read-only.
+- There is **no one-tap publish** — approval only flags a post for the
+  backend's publish worker.
+
+**Worker status banner** — from `GET /api/bots/marketing/publish-status`. Shows
+`WORKER ON` / `WORKER OFF` and how many approved posts are due now. When the
+worker is off, approved posts won't auto-publish until it's enabled on the
+backend (env `ENABLE_MARKETING_PUBLISH_WORKER`). Mobile cannot toggle the worker.
+
+**Connecting accounts** is web-only for now: disconnected platforms show
+"Connect this platform on the web dashboard first" and open the web dashboard
+via `Linking` (built-in; no `expo-web-browser` dependency added). Connect is
+never faked.
+
+API endpoints used by the Marketing tab:
+- `GET /api/social/destinations`
+- `POST /api/social/destinations/defaults`
+- `GET /api/bots/marketing/posts`
+- `POST /api/bots/marketing/posts/:id/status`
+- `GET /api/bots/marketing/publish-status`
+
+**Still web-only:** OAuth/connect flows, creating/scheduling new posts
+(`POST /api/bots/marketing/schedule` is not yet exposed in-app), and toggling
+the publish worker.
 
 ## What works now vs. placeholders
 
 **Works (wired to backend):**
 - Login / register / logout via `/api/auth/*` (session-cookie auth)
 - Home dashboard + Bots active-status pulled from `/api/user/dashboard`
+- Marketing publish destinations, default selection, scheduled-post approvals,
+  and worker status (see above)
 - Account screen with live user info, backend URL, legal deep links
 
 **Placeholders (UI ready, backend wiring pending):**
 - Manager prompt box — echoes the brief; needs the AI-manager endpoint
-- Approvals queue — sample items; needs a real approvals feed
 - Bots enable/disable — read-only status; toggling happens on web for now
+- In-app post creation/scheduling — schedule on the web for now

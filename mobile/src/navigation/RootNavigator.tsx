@@ -8,7 +8,7 @@ import { AuthScreen } from "../screens/AuthScreen";
 import { HomeScreen } from "../screens/HomeScreen";
 import { BotsScreen } from "../screens/BotsScreen";
 import { ManagerScreen } from "../screens/ManagerScreen";
-import { ApprovalsScreen } from "../screens/ApprovalsScreen";
+import { MarketingScreen } from "../screens/MarketingScreen";
 import { AccountScreen } from "../screens/AccountScreen";
 import { colors } from "../theme";
 
@@ -18,11 +18,11 @@ const ICONS: Record<string, string> = {
   Home: "◆",
   Bots: "✦",
   Manager: "⚡",
-  Approvals: "✓",
+  Marketing: "✓",
   Account: "●",
 };
 
-// Deep links: toolsyourway://home, toolsyourway://approvals, etc.
+// Deep links: toolsyourway://home, toolsyourway://marketing, etc.
 const linking: LinkingOptions<Record<string, undefined>> = {
   prefixes: ["toolsyourway://"],
   config: {
@@ -30,7 +30,7 @@ const linking: LinkingOptions<Record<string, undefined>> = {
       Home: "home",
       Bots: "bots",
       Manager: "manager",
-      Approvals: "approvals",
+      Marketing: "marketing",
       Account: "account",
     },
   },
@@ -72,7 +72,7 @@ export function RootNavigator() {
         <Tab.Screen name="Home" component={HomeScreen} />
         <Tab.Screen name="Bots" component={BotsScreen} />
         <Tab.Screen name="Manager" component={ManagerScreen} />
-        <Tab.Screen name="Approvals" component={ApprovalsScreen} />
+        <Tab.Screen name="Marketing" component={MarketingScreen} />
         <Tab.Screen name="Account" component={AccountScreen} />
       </Tab.Navigator>
     </NavigationContainer>
