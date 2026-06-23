@@ -789,6 +789,13 @@ Now respond to the user's latest message with the depth and specificity of a rea
         });
       }
 
+      // OpenAI fallback config (used when Claude is overloaded / down).
+      const OPENAI_MODELS: Array<{ id: string; label: string }> = [
+        { id: "gpt-4o",      label: "GPT-4o" },
+        { id: "gpt-4o-mini", label: "GPT-4o mini" },
+      ];
+      const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
       // Always call Claude — no template short-circuits. Walk the fallback chain on model-not-found errors.
       const callClaude = async (modelId: string) => {
         const r = await fetch("https://api.anthropic.com/v1/messages", {
@@ -809,10 +816,48 @@ Now respond to the user's latest message with the depth and specificity of a rea
         return { ok: r.ok, status: r.status, json };
       };
 
+      // Retry-on-overload wrapper for one Claude model. Honors 429/529/500/502/503 with exp backoff.
+      const callClaudeWithRetry = async (modelId: string, attempts = 3) => {
+        let last: { ok: boolean; status: number; json: any } = { ok: false, status: 0, json: null };
+        for (let i = 0; i < attempts; i++) {
+          last = await callClaude(modelId);
+          if (last.ok) return last;
+          const transient = [408, 425, 429, 500, 502, 503, 504, 529].includes(last.status);
+          if (!transient) return last;
+          // Exponential backoff: 600ms, 1.4s, 3s
+          await sleep(600 * Math.pow(2.2, i));
+        }
+        return last;
+      };
+
+      const callOpenAI = async (modelId: string) => {
+        const openaiKey = process.env.OPENAI_API_KEY;
+        if (!openaiKey) return { ok: false, status: 0, json: { error: { message: "OPENAI_API_KEY not set" } } };
+        const r = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${openaiKey}`,
+          },
+          body: JSON.stringify({
+            model: modelId,
+            max_tokens: 2048,
+            messages: [
+              { role: "system", content: systemPrompt },
+              ...messages.map((m) => ({ role: m.role, content: m.content })),
+            ],
+          }),
+        });
+        const json: any = await r.json();
+        return { ok: r.ok, status: r.status, json };
+      };
+
       try {
         let lastErr: { status: number; json: any } | null = null;
+
+        // 1) Try every Claude model (with retries on overload) before falling back.
         for (const m of MODELS) {
-          const { ok, status, json } = await callClaude(m.id);
+          const { ok, status, json } = await callClaudeWithRetry(m.id);
           if (ok && json?.content?.[0]?.text) {
             return res.json({
               reply: json.content[0].text,
@@ -823,19 +868,42 @@ Now respond to the user's latest message with the depth and specificity of a rea
           }
           lastErr = { status, json };
           console.error(`[Nexus] Claude API error on ${m.id}`, status, JSON.stringify(json).slice(0, 400));
-          // Only walk to next model on "model not found / invalid model" errors.
+          // Walk to next Claude model on model-not-found OR sustained overload (so we don't keep hammering one model).
           const errBody = JSON.stringify(json);
           const modelMissing = status === 404 || /not[_ ]?found|invalid[_ ]?model|unknown.+model/i.test(errBody);
-          if (!modelMissing) break;
+          const overloaded  = [429, 500, 502, 503, 529].includes(status) || /overload|capacity|rate[_ ]?limit/i.test(errBody);
+          if (!modelMissing && !overloaded) break;
         }
+
+        // 2) Claude exhausted — fall back to OpenAI so Nexus stays alive.
+        if (process.env.OPENAI_API_KEY) {
+          for (const m of OPENAI_MODELS) {
+            const { ok, status, json } = await callOpenAI(m.id);
+            const text = json?.choices?.[0]?.message?.content;
+            if (ok && typeof text === "string" && text.trim().length > 0) {
+              console.log(`[Nexus] Served via OpenAI fallback (${m.id}) after Claude failure.`);
+              return res.json({
+                reply: text,
+                model: m.id,
+                modelLabel: m.label,
+                provider: "OpenAI",
+              });
+            }
+            lastErr = { status, json };
+            console.error(`[Nexus] OpenAI fallback failed on ${m.id}`, status, JSON.stringify(json).slice(0, 400));
+          }
+        }
+
+        // 3) Both providers failed — surface the most informative error.
+        const errMsg = lastErr?.json?.error?.message || lastErr?.json?.message;
         return res.json({
-          reply: `My reasoning engine returned an error (${lastErr?.status ?? "unknown"}). ${lastErr?.json?.error?.message ? "Claude said: " + lastErr.json.error.message : "Please try again in a moment."}`,
+          reply: `Both Claude and GPT are unreachable right now${lastErr?.status ? ` (last status ${lastErr.status})` : ""}. ${errMsg ? "Underlying error: " + errMsg + ". " : ""}This usually clears in 30–60 seconds — try again.`,
           model: null,
           modelLabel: null,
           provider: PROVIDER,
         });
       } catch (apiErr: any) {
-        console.error("[Nexus] Claude API exception", apiErr?.message || apiErr);
+        console.error("[Nexus] Chat reasoning exception", apiErr?.message || apiErr);
         return res.json({
           reply: `I couldn't reach my reasoning engine just now (${apiErr?.message || "network error"}). Try again in a few seconds.`,
           model: null,
