@@ -4,7 +4,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { MessageCircle, X, Send, Bot, Sparkles, Minimize2, Mic } from "lucide-react";
+import { MessageCircle, X, Send, Bot, Sparkles, Minimize2, Mic, UserCog } from "lucide-react";
 
 const LANGUAGES = [
   { code: "en-IN", label: "English" },
@@ -30,11 +30,26 @@ interface ChatMessage {
   content: string;
 }
 
+const ROLE_PRESETS = [
+  { value: "", label: "Chief of Staff (default)" },
+  { value: "LinkedIn Content Strategist", label: "LinkedIn Content Strategist" },
+  { value: "Growth Marketer", label: "Growth Marketer" },
+  { value: "Senior Recruiter", label: "Senior Recruiter" },
+  { value: "Sales Leader", label: "Sales Leader" },
+  { value: "Brand Marketer", label: "Brand Marketer" },
+  { value: "Product Manager", label: "Product Manager" },
+  { value: "CFO", label: "CFO" },
+  { value: "Executive Coach", label: "Executive Coach" },
+];
+
 export default function AiChat() {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [role, setRole] = useState<string>("");
+  const [showRolePicker, setShowRolePicker] = useState(false);
+  const [activeModel, setActiveModel] = useState<{ label: string; provider: string } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [isRecording, setIsRecording] = useState(false);
@@ -90,11 +105,15 @@ export default function AiChat() {
       const res = await apiRequest("POST", "/api/chat", {
         message,
         history: messages,
+        role: role || undefined,
       });
       return res.json();
     },
     onSuccess: (data) => {
       setMessages((prev) => [...prev, { role: "assistant", content: data.reply }]);
+      if (data?.modelLabel) {
+        setActiveModel({ label: data.modelLabel, provider: data.provider || "Anthropic" });
+      }
     },
     onError: () => {
       setMessages((prev) => [
@@ -174,14 +193,33 @@ export default function AiChat() {
                 <Sparkles className="h-4 w-4 text-amber-400" />
               </div>
               <div>
-                <div className="text-sm font-semibold text-white">AI Manager</div>
+                <div className="text-sm font-semibold text-white flex items-center gap-1.5">
+                  <span>Nexus{role ? <span className="text-amber-300/90 font-normal"> · {role}</span> : null}</span>
+                  {activeModel && (
+                    <span
+                      className="text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-white/10 text-amber-200 border border-amber-300/20"
+                      title={`${activeModel.provider} · ${activeModel.label}`}
+                      data-testid="model-badge"
+                    >
+                      {activeModel.label}
+                    </span>
+                  )}
+                </div>
                 <div className="text-[10px] text-white/50 flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
-                  Online
+                  AI Chief of Staff · {activeModel ? `Powered by ${activeModel.provider}` : "Online"}
                 </div>
               </div>
             </div>
             <div className="flex items-center gap-1">
+              <button
+                onClick={() => setShowRolePicker(v => !v)}
+                className="p-1.5 rounded-lg hover:bg-white/10 text-white/70 hover:text-white transition-colors"
+                data-testid="chat-role-picker"
+                title="Change Nexus's role"
+              >
+                <UserCog className="h-4 w-4" />
+              </button>
               <button
                 onClick={() => setOpen(false)}
                 className="p-1.5 rounded-lg hover:bg-white/10 text-white/70 hover:text-white transition-colors"
@@ -191,6 +229,26 @@ export default function AiChat() {
               </button>
             </div>
           </div>
+
+          {/* Role picker (collapsible) */}
+          {showRolePicker && (
+            <div className="px-4 py-2.5 bg-muted/40 border-b border-border flex-shrink-0">
+              <div className="text-[11px] font-medium text-foreground mb-1.5">Have Nexus act as your…</div>
+              <select
+                value={role}
+                onChange={(e) => setRole(e.target.value)}
+                className="w-full text-xs border border-border rounded-lg px-2.5 py-1.5 bg-background"
+                data-testid="role-select"
+              >
+                {ROLE_PRESETS.map((r) => (
+                  <option key={r.value} value={r.value}>{r.label}</option>
+                ))}
+              </select>
+              <div className="text-[10px] text-muted-foreground mt-1.5">
+                Or just type “act as my [role]” in chat — Nexus adapts.
+              </div>
+            </div>
+          )}
 
           {/* Messages */}
           <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 bg-background">
@@ -202,17 +260,19 @@ export default function AiChat() {
                 >
                   <Bot className="h-6 w-6" style={{ color: "#1E1650" }} />
                 </div>
-                <p className="text-sm font-semibold text-foreground mb-1">Hi {user.name?.split(" ")[0]}!</p>
-                <p className="text-xs text-muted-foreground mb-4">
-                  I'm your Virtual AI Manager. Ask me anything about growing your business.
+                <p className="text-sm font-semibold text-foreground mb-1">
+                  Hi {user.name?.split(" ")[0]}, I'm Nexus.
+                </p>
+                <p className="text-xs text-muted-foreground mb-4 px-4">
+                  Your AI Chief of Staff. Tell me what you're working on — a launch, a hire, a campaign, a 60-day plan — and I'll think it through with you and ship the work.
                 </p>
                 {/* Quick actions */}
                 <div className="flex flex-wrap gap-1.5 justify-center">
                   {[
-                    "Help me grow my business",
-                    "What can my bots do?",
-                    "Marketing tips",
-                    "Setup my sales funnel",
+                    "Build me a 60-day LinkedIn content plan",
+                    "Draft a recruiter outreach sequence",
+                    "Critique my pricing page",
+                    "Plan a product launch",
                   ].map((q) => (
                     <button
                       key={q}
@@ -270,7 +330,7 @@ export default function AiChat() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Ask your AI Manager..."
+              placeholder={role ? `Ask Nexus (acting as ${role})…` : "Ask Nexus anything…"}
               className="flex-1 text-sm border-0 bg-muted/50 focus-visible:ring-1 focus-visible:ring-primary/30 rounded-xl px-4"
               disabled={sendMessage.isPending}
               data-testid="chat-input"

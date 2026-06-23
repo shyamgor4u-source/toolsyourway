@@ -690,11 +690,11 @@ export async function registerRoutes(server: Server, app: Express) {
   });
 
   // ============================================================
-  // VIRTUAL AI MANAGER — Chat endpoint
+  // NEXUS — AI Chief of Staff (chat endpoint)
   // ============================================================
   app.post("/api/chat", requireAuth, requireActiveAccess, async (req: Request, res: Response) => {
     try {
-      const { message, history } = req.body;
+      const { message, history, role } = req.body as { message?: string; history?: Array<{role: string; content: string}>; role?: string };
       if (!message || typeof message !== "string") {
         return res.status(400).json({ message: "Message is required" });
       }
@@ -704,45 +704,74 @@ export async function registerRoutes(server: Server, app: Express) {
       const activeBots = bots.filter(b => b.status === "active").map(b => b.botType).join(", ");
       const subscription = await storage.getActiveSubscription(user.id);
 
-      const systemPrompt = `You are the Virtual AI Manager for ToolsYourWay — an AI-powered business automation platform.
+      const roleHint = (role && typeof role === "string" && role.trim().length > 0)
+        ? `The user has asked you to act as their **${role.trim()}**. Stay in that role for this conversation. Bring the depth, judgement, and frameworks a top-tier ${role.trim()} would use. You can still leverage the ToolsYourWay platform where relevant, but your primary identity right now is ${role.trim()}.`
+        : `If the user asks you to act as their Content Strategist, Recruiter, CFO, Growth PM, Brand Marketer, or any other specialist — adopt that role fully and stay in it. You are role-flexible by design.`;
 
-You are speaking with ${user.name} (${user.email}).
-Their plan: ${user.plan || "free"} (${subscription ? "active subscription" : "no subscription"})
-Active bots: ${activeBots || "none"}
-Total bots available: Marketing, Data, Email, Sales, HR, Finance, Legal, SEO, Support
+      const systemPrompt = `You are **Nexus** — an elite AI Chief of Staff built into ToolsYourWay. You are NOT a chatbot, NOT a templated assistant, NOT a search engine. You are a senior operator who thinks, plans, and executes alongside the user.
 
-Your role:
-- Help them grow their business using the platform's AI bots
-- Suggest which bots to activate and how to configure them
-- Explain what each bot does in simple terms
-- Provide business growth tips, marketing ideas, sales strategies
-- Guide them through the platform features
-- Answer questions about plans, pricing, integrations
-- Be encouraging, practical, and results-oriented
-- Speak in a friendly, professional tone — like a smart COO who genuinely cares
-- If they ask in Hindi, Gujarati, or any other language, respond in that language
-- Keep responses concise (2-4 paragraphs max) unless they ask for detail
+## Who you are talking to
+- Name: ${user.name}
+- Email: ${user.email}
+- Current plan: ${user.plan || "free"} (${subscription ? "active subscription" : "no active subscription"})
+- Active bots on their account: ${activeBots || "none yet"}
 
-Plan details:
-- Ultra ($49/mo): 5 bots, basic AI Manager, 3-5 visuals/mo
-- Pro ($99/mo): 7 bots, advanced scheduling, 5-10 visuals + 1-3 videos/mo
-- Premium ($199/mo): All 9 bots, custom workflows, 5-10 visuals + 1-5 videos/mo, dedicated support
+## How to behave (THIS IS CRITICAL)
+1. **Read the full conversation history before responding.** Do not greet the user again if you have already greeted them. Do not ask questions they have already answered. Do not repeat yourself.
+2. **If the user shared background about themselves, acknowledge it specifically.** Reference details they gave you (company, role, goal, audience, numbers) — by name. Show them you actually read it.
+3. **When they ask for a plan, deliverable, calendar, strategy, or asset — produce it.** Do not respond with "want me to help you with X?". Just do X. Be the senior operator who ships work, not the intern who asks for permission.
+4. **Match the depth of the ask.** A one-line question gets a focused 2-paragraph answer. A complex multi-part request ("build me a 60-day content plan") gets a complete, structured, detailed deliverable — with concrete posts, hooks, dates, and CTAs. Never punt on depth.
+5. **Think like Claude / ChatGPT at their best.** Show reasoning, structure with headings/tables/bullets when helpful, give specific examples, name real frameworks. No generic platitudes.
+6. **${roleHint}**
+7. **Language**: respond in whatever language the user writes in (English, Hindi, Hinglish, Gujarati, Tamil, etc.). Mirror their tone.
+8. **Never** say "I'm an AI" or "I'm a language model". You are Nexus.
+9. **Never** repeat the same greeting or canned welcome twice. If you have already introduced yourself in this conversation, just answer the question.
+10. **No filler.** No "Great question!" / "Let me think about that..." / "Here's what I can do for you..." openings. Get straight to value.
 
-Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager. Act like it.`;
+## Capabilities you can reference when relevant
+- 9 active bots on the platform: Marketing, Data, Email, Sales, HR, Finance, Legal, SEO, Support
+- Outreach Hub with Apollo.io prospect search
+- Founder Suite & Influencer Suite with multi-platform OAuth publishing (LinkedIn, X, YouTube, Instagram, Facebook)
+- AI image + video generation, 14 language translations
+- Plans: Ultra $49 / Pro $99 / Premium $199
 
-      // Build messages array
-      const messages: Array<{role: string; content: string}> = [];
+Only bring up the platform when it actually helps the user's current goal. Do not pitch when they want strategy.
+
+Now respond to the user's latest message with the depth and specificity of a real senior operator. The user is ${user.name?.split(" ")[0] || "there"}.`;
+
+      // Build messages array from history (last 20 turns for richer context)
+      const messages: Array<{role: "user" | "assistant"; content: string}> = [];
       if (history && Array.isArray(history)) {
-        for (const h of history.slice(-10)) { // last 10 messages for context
-          messages.push({ role: h.role, content: h.content });
+        for (const h of history.slice(-20)) {
+          if (h && (h.role === "user" || h.role === "assistant") && typeof h.content === "string" && h.content.trim().length > 0) {
+            messages.push({ role: h.role, content: h.content });
+          }
         }
       }
       messages.push({ role: "user", content: message });
 
-      // Try Claude API first, fall back to smart preset responses
+      // Model registry — primary + fallback chain. Frontend reads `modelLabel` to display in UI.
+      const MODELS: Array<{ id: string; label: string }> = [
+        { id: "claude-sonnet-4-5-20250929", label: "Claude Sonnet 4.5" },
+        { id: "claude-sonnet-4-20250514",   label: "Claude Sonnet 4" },
+        { id: "claude-3-5-sonnet-latest",   label: "Claude 3.5 Sonnet" },
+      ];
+      const PROVIDER = "Anthropic";
+
       const apiKey = process.env.ANTHROPIC_API_KEY;
-      if (apiKey) {
-        const apiRes = await fetch("https://api.anthropic.com/v1/messages", {
+      if (!apiKey) {
+        console.error("[Nexus] ANTHROPIC_API_KEY is not set — cannot generate intelligent replies.");
+        return res.json({
+          reply: `I can't think clearly right now — my reasoning engine isn't connected. An admin needs to set the \`ANTHROPIC_API_KEY\` environment variable on the server. Once that's done, I'll be fully online and we can pick this up properly.`,
+          model: null,
+          modelLabel: null,
+          provider: PROVIDER,
+        });
+      }
+
+      // Always call Claude — no template short-circuits. Walk the fallback chain on model-not-found errors.
+      const callClaude = async (modelId: string) => {
+        const r = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -750,44 +779,53 @@ Do NOT say "I'm an AI" or "I'm a language model". You ARE the Virtual AI Manager
             "anthropic-version": "2023-06-01",
           },
           body: JSON.stringify({
-            model: "claude-sonnet-4-20250514",
-            max_tokens: 600,
+            model: modelId,
+            max_tokens: 2048,
             system: systemPrompt,
-            messages: messages.map(m => ({ role: m.role as "user" | "assistant", content: m.content })),
+            messages,
           }),
         });
-        const data = await apiRes.json();
-        if (data.content?.[0]?.text) {
-          return res.json({ reply: data.content[0].text });
+        const json: any = await r.json();
+        return { ok: r.ok, status: r.status, json };
+      };
+
+      try {
+        let lastErr: { status: number; json: any } | null = null;
+        for (const m of MODELS) {
+          const { ok, status, json } = await callClaude(m.id);
+          if (ok && json?.content?.[0]?.text) {
+            return res.json({
+              reply: json.content[0].text,
+              model: m.id,
+              modelLabel: m.label,
+              provider: PROVIDER,
+            });
+          }
+          lastErr = { status, json };
+          console.error(`[Nexus] Claude API error on ${m.id}`, status, JSON.stringify(json).slice(0, 400));
+          // Only walk to next model on "model not found / invalid model" errors.
+          const errBody = JSON.stringify(json);
+          const modelMissing = status === 404 || /not[_ ]?found|invalid[_ ]?model|unknown.+model/i.test(errBody);
+          if (!modelMissing) break;
         }
+        return res.json({
+          reply: `My reasoning engine returned an error (${lastErr?.status ?? "unknown"}). ${lastErr?.json?.error?.message ? "Claude said: " + lastErr.json.error.message : "Please try again in a moment."}`,
+          model: null,
+          modelLabel: null,
+          provider: PROVIDER,
+        });
+      } catch (apiErr: any) {
+        console.error("[Nexus] Claude API exception", apiErr?.message || apiErr);
+        return res.json({
+          reply: `I couldn't reach my reasoning engine just now (${apiErr?.message || "network error"}). Try again in a few seconds.`,
+          model: null,
+          modelLabel: null,
+          provider: PROVIDER,
+        });
       }
-
-      // Smart fallback — no API key needed
-      const lower = message.toLowerCase();
-      let reply = "";
-
-      if (lower.includes("hello") || lower.includes("hi") || lower.includes("hey")) {
-        reply = `Hey ${user.name}! 👋 I'm your Virtual AI Manager. I'm here to help you automate and grow your business.\n\nYou currently have ${activeBots ? activeBots.split(", ").length + " bots active (" + activeBots + ")" : "no bots active yet"}. ${!activeBots ? "Want me to recommend which bots to start with based on your business?" : "What would you like to work on today?"}`;
-      } else if (lower.includes("marketing") || lower.includes("social") || lower.includes("content") || lower.includes("post")) {
-        reply = "Great question! Your Marketing Bot can auto-publish content across Instagram, LinkedIn, X, and Facebook. Here's what I'd suggest:\n\n1. **Start with LinkedIn** — it has the best organic reach right now for B2B\n2. **Post 3x per week** minimum — consistency beats virality\n3. **Use the AI visual generator** — it creates branded graphics from your prompts\n\nWant me to help you set up your first content calendar?";
-      } else if (lower.includes("sales") || lower.includes("lead") || lower.includes("revenue") || lower.includes("customer")) {
-        reply = "Your Sales Bot is built to run your entire funnel on autopilot:\n\n1. **Lead capture** from your website, WhatsApp, and social DMs\n2. **Auto-qualification** — scores each lead based on fit and intent\n3. **Follow-up sequences** via WhatsApp and email\n4. **Proposal generation** — creates and sends quotes automatically\n\nMost of our users see a 3-5× increase in qualified leads within the first month. Which part of your sales process needs the most help?";
-      } else if (lower.includes("finance") || lower.includes("invoice") || lower.includes("billing") || lower.includes("gst") || lower.includes("tax")) {
-        reply = "The Finance Bot handles all your money ops:\n\n• **Auto-invoicing** — generates and sends invoices when a deal closes\n• **Payment tracking** — syncs with Razorpay and Stripe in real-time\n• **GST/Tax prep** — calculates and prepares return data quarterly\n• **Expense tracking** — categorizes and reports all business expenses\n\nIt connects to Tally, Zoho Books, and Google Sheets. Want me to activate it for you?";
-      } else if (lower.includes("plan") || lower.includes("upgrade") || lower.includes("pricing") || lower.includes("cost")) {
-        reply = `You're currently on the **${(user.plan || "free").charAt(0).toUpperCase() + (user.plan || "free").slice(1)}** plan.\n\nHere's what each tier offers:\n• **Ultra** ($49/mo) — 5 bots, AI Manager, 3-5 visuals\n• **Pro** ($99/mo) — 7 bots, advanced scheduling, videos\n• **Premium** ($199/mo) — All 9 bots, custom workflows, dedicated support\n\nAll plans include 20+ language support and 24/7 operation. ${user.plan === "premium" ? "You already have full access!" : "Would you like to upgrade?"}`;
-      } else if (lower.includes("help") || lower.includes("what can") || lower.includes("guide")) {
-        reply = `Here's what I can help you with:\n\n🤖 **Bot management** — activate, configure, and optimize your AI bots\n📈 **Growth strategy** — marketing ideas, sales tips, content planning\n💰 **Finance & billing** — invoicing, GST, expense tracking\n🔍 **SEO & content** — keyword research, blog ideas, rank tracking\n👥 **HR & hiring** — job postings, candidate screening\n⚖️ **Legal** — contracts, NDAs, compliance\n\nJust ask me anything — I'm your AI COO!`;
-      } else if (lower.includes("hindi") || lower.includes("हिन्दी")) {
-        reply = `बिलकुल, ${user.name}! 🙏 मैं आपका Virtual AI Manager हूँ। मैं हिन्दी, गुजराती, तमिल और 20+ भाषाओं में बात कर सकता हूँ।\n\nआप अपने बिजनेस के बारे में मुझसे कुछ भी पूछ सकते हैं — मार्केटिंग, सेल्स, HR, फाइनेंस कुछ भी!`;
-      } else {
-        reply = `Good question! Let me think about that...\n\nAs your AI Manager, I can help you with:\n• Activating and configuring any of your 9 AI bots\n• Growing your revenue with marketing and sales strategies\n• Managing finances, hiring, legal docs, and customer support\n• Content creation and SEO optimization\n\nCould you tell me more about what you're trying to achieve? The more specific you are, the better I can help!`;
-      }
-
-      res.json({ reply });
     } catch (err) {
-      console.error("Chat error:", err);
-      res.status(500).json({ reply: "I'm having a moment — please try again. If this keeps happening, check your connection." });
+      console.error("[Nexus] Chat handler error:", err);
+      res.status(500).json({ reply: "Something went sideways on my end. Please try again." });
     }
   });
 
