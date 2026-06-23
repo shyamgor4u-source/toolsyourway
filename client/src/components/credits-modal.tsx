@@ -50,10 +50,28 @@ export function CreditsModal({ open, onClose, title, description }: CreditsModal
       return { order, pack };
     },
     onSuccess: ({ order, pack }) => {
-      // Load Razorpay checkout
-      const script = document.createElement("script");
-      script.src = "https://checkout.razorpay.com/v1/checkout.js";
-      script.onload = () => {
+      // Guard: never open Checkout without a publishable key. Passing
+      // key:undefined makes Razorpay request checkout-static-next/build/undefined.
+      if (!order?.keyId || !order?.orderId) {
+        toast({
+          title: "Razorpay not configured",
+          description: "Indian payments are temporarily unavailable. Use Stripe, or contact support.",
+          variant: "destructive",
+        });
+        setLoadingPack(null);
+        return;
+      }
+      const openCheckout = () => {
+        // @ts-ignore
+        if (typeof window.Razorpay !== "function") {
+          toast({
+            title: "Checkout script not loaded",
+            description: "Refresh the page and try again.",
+            variant: "destructive",
+          });
+          setLoadingPack(null);
+          return;
+        }
         // @ts-ignore
         const rzp = new window.Razorpay({
           key: order.keyId,
@@ -76,6 +94,20 @@ export function CreditsModal({ open, onClose, title, description }: CreditsModal
           theme: { color: "#1E1650" },
         });
         rzp.open();
+      };
+      // The checkout script is already loaded from client/index.html.
+      // Open immediately if available, otherwise inject it on demand.
+      // @ts-ignore
+      if (typeof window.Razorpay === "function") {
+        openCheckout();
+        return;
+      }
+      const script = document.createElement("script");
+      script.src = "https://checkout.razorpay.com/v1/checkout.js";
+      script.onload = openCheckout;
+      script.onerror = () => {
+        toast({ title: "Could not load Razorpay", description: "Check your network and try again.", variant: "destructive" });
+        setLoadingPack(null);
       };
       document.body.appendChild(script);
     },

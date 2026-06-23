@@ -14,14 +14,16 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
-import { useState } from "react";
+import { useState, useRef } from "react";
 import {
   Bot, Megaphone, Database, Mail, TrendingUp, Users,
   ArrowLeft, Settings, Activity, BarChart3, Clock, CheckCircle2,
   AlertCircle, Globe, Calendar, Zap, Play, Pause,
   IndianRupee, Scale, Search, Headphones, Plus, Trash2, Loader2,
   ImageIcon, Film, Sparkles, Mic, Download, Radio, Lock, Crown, RotateCcw,
+  Send, Building2, User as UserIcon, Tv, Save,
 } from "lucide-react";
 import { Link as WLink } from "wouter";
 
@@ -340,10 +342,20 @@ export default function BotDetailPage() {
 
   const schedulePost = useMutation({
     mutationFn: async () => {
+      // Map the platform label shown in the composer to its connection key
+      // so we can attach the user's selected destinations for that platform.
+      const p = mktPlatform.toLowerCase();
+      const platformKey = p.includes("linkedin") ? "linkedin"
+        : p.includes("instagram") ? "instagram"
+        : p.includes("facebook") ? "facebook"
+        : p.includes("youtube") ? "youtube"
+        : p.includes("tiktok") ? "tiktok"
+        : "twitter";
       await apiRequest("POST", "/api/bots/marketing/schedule", {
         content: mktGenerated,
         platform: mktPlatform,
         scheduledFor: new Date().toISOString(),
+        destinationIds: effectiveSelected[platformKey] || [],
       });
     },
     onSuccess: () => {
@@ -364,6 +376,32 @@ export default function BotDetailPage() {
       return res.json();
     },
     enabled: botType === "marketing",
+  });
+
+  // Whether the auto-publish worker is enabled on the server (for UI hints).
+  const { data: publishStatus } = useQuery<{ workerEnabled: boolean }>({
+    queryKey: ["/api/bots/marketing/publish-status"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/bots/marketing/publish-status");
+      return res.json();
+    },
+    enabled: botType === "marketing",
+  });
+
+  const postStatusMutation = useMutation({
+    mutationFn: async ({ id, action }: { id: number; action: string }) => {
+      const res = await apiRequest("POST", `/api/bots/marketing/posts/${id}/status`, { action });
+      return res.json();
+    },
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/bots/marketing/posts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/bots/marketing/publish-status"] });
+      const verb = vars.action === "approve" ? "approved" : vars.action === "cancel" ? "cancelled" : vars.action === "retry" ? "queued for retry" : "updated";
+      toast({ title: `Post ${verb}`, description: vars.action === "approve" ? "It will publish at its scheduled time once the worker is enabled." : undefined });
+    },
+    onError: (err: any) => {
+      toast({ title: "Action failed", description: err.message, variant: "destructive" });
+    },
   });
 
   // Image & Video generation state
@@ -518,6 +556,66 @@ export default function BotDetailPage() {
     enabled: botType === "marketing",
   });
 
+  // ── Publish Destinations (profile / page / channel selection) ──────────────
+  interface DestCapabilities { canPostText: boolean; canPostImage: boolean; canPostVideo: boolean; canPostCarousel: boolean; }
+  interface Destination {
+    platform: string; destinationId: string; accountId: string | null;
+    destinationType: string; displayName: string; handle: string | null;
+    pageName: string | null; profilePictureUrl: string | null; connected: boolean;
+    capabilities: DestCapabilities; selectedByDefault: boolean; note?: string;
+  }
+  interface PlatformDestinations {
+    platform: string; label: string; connected: boolean;
+    supportsProfile: boolean; supportsPage: boolean;
+    destinations: Destination[]; note?: string;
+  }
+
+  const { data: destinationsData } = useQuery<{ platforms: PlatformDestinations[] }>({
+    queryKey: ["/api/social/destinations"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/social/destinations");
+      return res.json();
+    },
+    enabled: botType === "marketing",
+  });
+
+  // Selected destination IDs per platform. Initialized from server defaults
+  // the first time data arrives; afterwards the user controls it.
+  const [selectedDest, setSelectedDest] = useState<Record<string, string[]> | null>(null);
+  const effectiveSelected: Record<string, string[]> = (() => {
+    if (selectedDest) return selectedDest;
+    const init: Record<string, string[]> = {};
+    for (const p of destinationsData?.platforms || []) {
+      init[p.platform] = p.destinations.filter((d) => d.selectedByDefault).map((d) => d.destinationId);
+    }
+    return init;
+  })();
+
+  const toggleDestination = (platform: string, id: string) => {
+    setSelectedDest((prev) => {
+      const base = prev || effectiveSelected;
+      const current = base[platform] || [];
+      const next = current.includes(id) ? current.filter((x) => x !== id) : [...current, id];
+      return { ...base, [platform]: next };
+    });
+  };
+
+  const saveDestinations = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/social/destinations/defaults", { destinations: effectiveSelected });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/social/destinations"] });
+      toast({ title: "Destinations saved", description: "The Marketing Bot will publish to your selected destinations." });
+    },
+    onError: (err: any) => {
+      toast({ title: "Save failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const totalSelectedDestinations = Object.values(effectiveSelected).reduce((sum, ids) => sum + ids.length, 0);
+
   const [pagePickerOpen, setPagePickerOpen] = useState(false);
   const [pagePickerPlatform, setPagePickerPlatform] = useState("");
   const [pagePickerPages, setPagePickerPages] = useState<Array<{id: string; name: string; type: string}>>([]);
@@ -526,6 +624,30 @@ export default function BotDetailPage() {
   const [connectingPlatform, setConnectingPlatform] = useState<string | null>(null);
   const [connectPopupOpen, setConnectPopupOpen] = useState(false);
   const [connectStep, setConnectStep] = useState<"confirm" | "loading" | "pages" | "done">("confirm");
+
+  // Holds the OAuth popup opened synchronously on click. Browsers block
+  // window.open() if it is called after an await (not a direct user gesture),
+  // so we open a blank popup in the click handler and navigate it once the
+  // server returns the auth URL.
+  const oauthPopupRef = useRef<Window | null>(null);
+
+  const refreshConnectionState = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/social/connections"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/social/destinations"] });
+  };
+
+  // apiRequest throws Error("<status>: <body>"); pull out the human message.
+  const extractErrorMessage = (err: any): string => {
+    const raw = String(err?.message || "");
+    const stripped = raw.replace(/^\d{3}:\s*/, "");
+    try {
+      const parsed = JSON.parse(stripped);
+      if (parsed && typeof parsed.message === "string") return parsed.message;
+    } catch {
+      // not JSON — fall through
+    }
+    return stripped || raw;
+  };
 
   const startConnect = (platform: string) => {
     setConnectingPlatform(platform);
@@ -536,6 +658,9 @@ export default function BotDetailPage() {
   const confirmConnect = () => {
     if (!connectingPlatform) return;
     setConnectStep("loading");
+    // Open the popup NOW, inside the user gesture, so it is not blocked.
+    // It is navigated to the real auth URL once the server responds.
+    oauthPopupRef.current = window.open("about:blank", "socialAuth", "width=600,height=700,left=200,top=100");
     connectSocial.mutate(connectingPlatform);
   };
 
@@ -553,16 +678,31 @@ export default function BotDetailPage() {
     },
     onSuccess: (data) => {
       if (data.redirect) {
-        // Real OAuth — open in popup window + listen for postMessage from callback
-        const popup = window.open(data.redirect, "socialAuth", "width=600,height=700,left=200,top=100");
+        // Real OAuth — navigate the pre-opened popup + listen for postMessage from callback
+        const popup = oauthPopupRef.current;
+        if (popup && !popup.closed) {
+          popup.location.href = data.redirect;
+        } else {
+          // Popup was blocked or closed — fall back to a fresh window (may be blocked).
+          oauthPopupRef.current = window.open(data.redirect, "socialAuth", "width=600,height=700,left=200,top=100");
+        }
+        if (!oauthPopupRef.current) {
+          toast({
+            title: "Popup blocked",
+            description: "Allow popups for this site, then click Connect again.",
+            variant: "destructive",
+          });
+          setConnectPopupOpen(false);
+          return;
+        }
 
         const messageHandler = (evt: MessageEvent) => {
           if (evt.data?.type === "linkedin-oauth" || evt.data?.type === "oauth-complete") {
             window.removeEventListener("message", messageHandler);
-            queryClient.invalidateQueries({ queryKey: ["/api/social/connections"] });
+            refreshConnectionState();
             setConnectPopupOpen(false);
             if (evt.data.success) {
-              toast({ title: "Connected", description: "Account linked successfully." });
+              toast({ title: "Connected", description: "Account linked successfully. Loading your destinations…" });
             } else {
               toast({ title: "Connection failed", description: "Please try again.", variant: "destructive" });
             }
@@ -571,28 +711,37 @@ export default function BotDetailPage() {
         window.addEventListener("message", messageHandler);
 
         const timer = setInterval(() => {
-          if (popup?.closed) {
+          if (oauthPopupRef.current?.closed) {
             clearInterval(timer);
             window.removeEventListener("message", messageHandler);
-            queryClient.invalidateQueries({ queryKey: ["/api/social/connections"] });
+            refreshConnectionState();
             setConnectPopupOpen(false);
           }
         }, 500);
       } else if (data.needsPageSelection && data.pages) {
+        // No popup needed for this path — discard the blank one we opened.
+        oauthPopupRef.current?.close();
         setPagePickerPlatform(data.connection?.platform || "");
         setPagePickerPages(data.pages);
         setConnectStep("pages");
-        queryClient.invalidateQueries({ queryKey: ["/api/social/connections"] });
+        refreshConnectionState();
       } else {
-        queryClient.invalidateQueries({ queryKey: ["/api/social/connections"] });
+        oauthPopupRef.current?.close();
+        refreshConnectionState();
         setConnectStep("done");
         setTimeout(() => setConnectPopupOpen(false), 1500);
         toast({ title: `${data.connection?.platform} connected`, description: data.message });
       }
     },
     onError: (err: any) => {
+      // Close the blank popup we opened so the user is not left with a dead tab.
+      oauthPopupRef.current?.close();
       setConnectPopupOpen(false);
-      toast({ title: "Connection failed", description: err.message, variant: "destructive" });
+      toast({
+        title: "Connection failed",
+        description: extractErrorMessage(err) || "Social credentials are not configured. Contact the administrator.",
+        variant: "destructive",
+      });
     },
   });
 
@@ -613,8 +762,33 @@ export default function BotDetailPage() {
       await apiRequest("POST", "/api/social/disconnect", { platform });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/social/connections"] });
+      refreshConnectionState();
       toast({ title: "Disconnected" });
+    },
+  });
+
+  // Re-discover LinkedIn Pages using the stored token (no re-auth).
+  const refreshLinkedInPages = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/social/linkedin/refresh-pages");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      refreshConnectionState();
+      if (data.pageCount > 0) {
+        toast({ title: "LinkedIn Pages updated", description: `Found ${data.pageCount} Page${data.pageCount === 1 ? "" : "s"}.` });
+      } else if (data.requiresPermission) {
+        toast({
+          title: "No LinkedIn Pages found",
+          description: "The LinkedIn app needs organization admin permission to list Pages.",
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: "No LinkedIn Pages found", description: "Make sure you're an admin of a LinkedIn Page." });
+      }
+    },
+    onError: (err: any) => {
+      toast({ title: "Refresh failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -883,6 +1057,152 @@ export default function BotDetailPage() {
                         </CardContent>
                       </Card>
 
+                      {/* Publish Destinations — choose profile / page / channel */}
+                      <Card data-testid="card-publish-destinations">
+                        <CardHeader className="pb-3">
+                          <CardTitle className="text-base flex items-center gap-2">
+                            <Send className="h-4 w-4" /> Publish Destinations
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          <p className="text-xs text-muted-foreground">
+                            Choose where this bot can publish by default. You can select multiple destinations
+                            when supported (e.g. your LinkedIn profile and one or more LinkedIn Pages).
+                          </p>
+
+                          <div className="space-y-3">
+                            {(destinationsData?.platforms || []).map((p) => {
+                              const sp = SOCIAL_PLATFORMS.find((s) => s.key === p.platform);
+                              const selectedIds = effectiveSelected[p.platform] || [];
+                              return (
+                                <div
+                                  key={p.platform}
+                                  className="rounded-xl border border-border overflow-hidden"
+                                  data-testid={`destinations-${p.platform}`}
+                                >
+                                  <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 bg-muted/30 border-b border-border">
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      <span className="text-lg flex-shrink-0">{sp?.icon || "🌐"}</span>
+                                      <span className="text-sm font-semibold truncate">{p.label}</span>
+                                      {p.connected ? (
+                                        <Badge variant="outline" className="text-[9px] border-green-300 text-green-700 bg-green-50">
+                                          Connected
+                                        </Badge>
+                                      ) : (
+                                        <Badge variant="outline" className="text-[9px] text-muted-foreground">
+                                          Not connected
+                                        </Badge>
+                                      )}
+                                    </div>
+                                    {!p.connected && (
+                                      <Button
+                                        variant="outline" size="sm" className="text-[10px] h-6 flex-shrink-0"
+                                        onClick={() => startConnect(p.platform)}
+                                        disabled={connectSocial.isPending}
+                                        data-testid={`destinations-connect-${p.platform}`}
+                                      >Connect</Button>
+                                    )}
+                                  </div>
+
+                                  <div className="p-3 space-y-2">
+                                    {p.connected && p.destinations.length > 0 ? (
+                                      p.destinations.map((d) => {
+                                        const checked = selectedIds.includes(d.destinationId);
+                                        const TypeIcon = d.destinationType === "channel" ? Tv
+                                          : (d.destinationType === "profile" ? UserIcon : Building2);
+                                        return (
+                                          <label
+                                            key={d.destinationId}
+                                            className={`flex items-start gap-3 p-2.5 rounded-lg border cursor-pointer transition-colors ${
+                                              checked ? "border-primary/50 bg-primary/5" : "border-border hover:bg-muted/40"
+                                            }`}
+                                            data-testid={`destination-option-${d.destinationId}`}
+                                          >
+                                            <Checkbox
+                                              checked={checked}
+                                              onCheckedChange={() => toggleDestination(p.platform, d.destinationId)}
+                                              className="mt-0.5"
+                                              data-testid={`destination-checkbox-${d.destinationId}`}
+                                            />
+                                            <div className="flex-1 min-w-0">
+                                              <div className="flex items-center gap-1.5">
+                                                <TypeIcon className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                                                <span className="text-sm font-medium truncate">{d.displayName}</span>
+                                              </div>
+                                              <div className="flex flex-wrap gap-1 mt-1.5">
+                                                {d.capabilities.canPostText && <Badge variant="secondary" className="text-[8px] px-1.5 py-0">Text</Badge>}
+                                                {d.capabilities.canPostImage && <Badge variant="secondary" className="text-[8px] px-1.5 py-0">Image</Badge>}
+                                                {d.capabilities.canPostVideo && <Badge variant="secondary" className="text-[8px] px-1.5 py-0">Video</Badge>}
+                                                {d.capabilities.canPostCarousel && <Badge variant="secondary" className="text-[8px] px-1.5 py-0">Carousel</Badge>}
+                                              </div>
+                                            </div>
+                                          </label>
+                                        );
+                                      })
+                                    ) : p.connected ? (
+                                      <p className="text-[11px] text-muted-foreground py-1">
+                                        No publishable destinations detected yet. Re-connect or select a Page in Settings.
+                                      </p>
+                                    ) : (
+                                      <p className="text-[11px] text-muted-foreground py-1">
+                                        Connect {p.label} to choose where the bot publishes.
+                                      </p>
+                                    )}
+
+                                    {/* LinkedIn Pages helper: connected profile but no Pages discovered. */}
+                                    {p.connected && p.platform === "linkedin"
+                                      && p.supportsPage
+                                      && !p.destinations.some((d) => d.destinationType !== "profile") && (
+                                      <div
+                                        className="mt-1 rounded-lg border border-amber-200 bg-amber-50/60 p-2.5"
+                                        data-testid="linkedin-pages-empty"
+                                      >
+                                        <p className="text-[11px] text-amber-800">
+                                          No LinkedIn Pages found. Make sure your LinkedIn account is an admin of the Page
+                                          and the LinkedIn app has organization permissions.
+                                        </p>
+                                        <Button
+                                          variant="outline" size="sm" className="text-[10px] h-6 mt-2"
+                                          onClick={() => refreshLinkedInPages.mutate()}
+                                          disabled={refreshLinkedInPages.isPending}
+                                          data-testid="button-refresh-linkedin-pages"
+                                        >
+                                          {refreshLinkedInPages.isPending ? (
+                                            <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Checking…</>
+                                          ) : "Refresh Pages"}
+                                        </Button>
+                                      </div>
+                                    )}
+
+                                    {p.note && (
+                                      <p className="text-[10px] text-muted-foreground/80 pt-1">{p.note}</p>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          <div className="flex items-center justify-between pt-1">
+                            <span className="text-[11px] text-muted-foreground" data-testid="destinations-selected-count">
+                              {totalSelectedDestinations} destination{totalSelectedDestinations === 1 ? "" : "s"} selected
+                            </span>
+                            <Button
+                              size="sm"
+                              onClick={() => saveDestinations.mutate()}
+                              disabled={saveDestinations.isPending}
+                              data-testid="button-save-destinations"
+                            >
+                              {saveDestinations.isPending ? (
+                                <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Saving…</>
+                              ) : (
+                                <><Save className="h-3.5 w-3.5 mr-1.5" /> Save Destinations</>
+                              )}
+                            </Button>
+                          </div>
+                        </CardContent>
+                      </Card>
+
                       {/* AI Creative Studio — Image & Video */}
                       <Card>
                         <CardHeader className="pb-3">
@@ -1116,6 +1436,11 @@ export default function BotDetailPage() {
                           <CardTitle className="text-base flex items-center gap-2">
                             <Calendar className="h-4 w-4" /> Scheduled Posts
                           </CardTitle>
+                          <p className="text-xs text-muted-foreground">
+                            {publishStatus?.workerEnabled
+                              ? "Auto-publish is ON. Approved posts publish automatically at their scheduled time."
+                              : "Auto-publish is OFF. Approved posts will only publish once an admin enables the publish worker."}
+                          </p>
                         </CardHeader>
                         <CardContent className="p-0">
                           {!scheduledPosts || scheduledPosts.length === 0 ? (
@@ -1124,18 +1449,99 @@ export default function BotDetailPage() {
                             </div>
                           ) : (
                             <div className="divide-y divide-border">
-                              {scheduledPosts.map((post: any, i: number) => (
-                                <div key={post.id ?? i} className="flex items-start gap-3 px-5 py-3.5">
+                              {scheduledPosts.map((post: any, i: number) => {
+                                const statusBg: Record<string, string> = {
+                                  published: "#0D9E98",
+                                  approved: "#2563EB",
+                                  scheduled: "#C98A1A",
+                                  publishing: "#7C3AED",
+                                  partial_failed: "#D97706",
+                                  failed: "#DC2626",
+                                  cancelled: "#6B7280",
+                                };
+                                const busy = postStatusMutation.isPending;
+                                const canApprove = ["draft", "scheduled", "cancelled"].includes(post.status);
+                                const canCancel = !["published", "cancelled", "publishing"].includes(post.status);
+                                const canRetry = ["failed", "partial_failed"].includes(post.status);
+                                const canUnapprove = post.status === "approved";
+                                return (
+                                <div key={post.id ?? i} className="px-5 py-3.5" data-testid={`scheduled-post-${post.id ?? i}`}>
+                                  <div className="flex items-start gap-3">
                                   <div className="flex-1 min-w-0">
                                     <p className="text-sm text-foreground truncate">{post.content?.slice(0, 80)}{(post.content?.length ?? 0) > 80 ? "…" : ""}</p>
                                     <p className="text-xs text-muted-foreground mt-0.5">{post.scheduledFor ? new Date(post.scheduledFor).toLocaleString() : ""}</p>
+                                    {Array.isArray(post.destinations) && post.destinations.length > 0 && (
+                                      <div className="flex flex-wrap gap-1 mt-1.5" data-testid={`post-destinations-${post.id ?? i}`}>
+                                        {post.destinations.map((d: any, di: number) => (
+                                          <Badge
+                                            key={d.destinationId ?? di}
+                                            variant="secondary"
+                                            className="text-[10px] font-normal"
+                                            data-testid={`post-destination-chip-${d.destinationId ?? di}`}
+                                          >
+                                            {d.displayName || d.pageName || d.handle || d.destinationId}
+                                          </Badge>
+                                        ))}
+                                      </div>
+                                    )}
+                                    {Array.isArray(post.publishResults) && post.publishResults.length > 0 && (
+                                      <div className="mt-2 space-y-1" data-testid={`post-results-${post.id ?? i}`}>
+                                        {post.publishResults.map((r: any, ri: number) => (
+                                          <div key={ri} className="flex items-center gap-1.5 text-[11px]">
+                                            {r.ok ? <CheckCircle2 className="h-3 w-3 text-teal-600 flex-shrink-0" /> : <AlertCircle className="h-3 w-3 text-red-500 flex-shrink-0" />}
+                                            <span className="text-muted-foreground truncate">{r.displayName}:</span>
+                                            {r.ok ? (
+                                              r.url ? <a href={r.url} target="_blank" rel="noreferrer" className="text-teal-700 underline truncate">View post</a> : <span className="text-teal-700">posted</span>
+                                            ) : (
+                                              <span className="text-red-600 truncate">{r.error || "failed"}</span>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                    {post.lastError && !(Array.isArray(post.publishResults) && post.publishResults.length) && (
+                                      <p className="text-[11px] text-red-600 mt-1.5">{post.lastError}</p>
+                                    )}
                                   </div>
                                   <div className="flex gap-1.5 flex-shrink-0">
                                     {post.platform && <Badge variant="outline" className="text-[10px]">{post.platform}</Badge>}
-                                    {post.status && <Badge className="text-[10px]" style={{ background: post.status === "published" ? "#0D9E98" : post.status === "scheduled" ? "#C98A1A" : undefined }}>{post.status}</Badge>}
+                                    {post.status && <Badge className="text-[10px]" style={{ background: statusBg[post.status] }} data-testid={`post-status-${post.id ?? i}`}>{post.status}</Badge>}
                                   </div>
+                                  </div>
+                                  {(canApprove || canCancel || canRetry || canUnapprove) && (
+                                    <div className="flex gap-1.5 mt-2">
+                                      {canApprove && (
+                                        <Button size="sm" variant="outline" className="h-7 text-[11px]" disabled={busy}
+                                          onClick={() => postStatusMutation.mutate({ id: post.id, action: "approve" })}
+                                          data-testid={`post-approve-${post.id ?? i}`}>
+                                          <CheckCircle2 className="h-3 w-3 mr-1" /> Approve
+                                        </Button>
+                                      )}
+                                      {canUnapprove && (
+                                        <Button size="sm" variant="outline" className="h-7 text-[11px]" disabled={busy}
+                                          onClick={() => postStatusMutation.mutate({ id: post.id, action: "unapprove" })}
+                                          data-testid={`post-unapprove-${post.id ?? i}`}>
+                                          Unapprove
+                                        </Button>
+                                      )}
+                                      {canRetry && (
+                                        <Button size="sm" variant="outline" className="h-7 text-[11px]" disabled={busy}
+                                          onClick={() => postStatusMutation.mutate({ id: post.id, action: "retry" })}
+                                          data-testid={`post-retry-${post.id ?? i}`}>
+                                          <RotateCcw className="h-3 w-3 mr-1" /> Retry failed
+                                        </Button>
+                                      )}
+                                      {canCancel && (
+                                        <Button size="sm" variant="ghost" className="h-7 text-[11px] text-muted-foreground" disabled={busy}
+                                          onClick={() => postStatusMutation.mutate({ id: post.id, action: "cancel" })}
+                                          data-testid={`post-cancel-${post.id ?? i}`}>
+                                          Cancel
+                                        </Button>
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
-                              ))}
+                              );})}
                             </div>
                           )}
                         </CardContent>

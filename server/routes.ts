@@ -14,8 +14,28 @@ import Replicate from "replicate";
 import { storage, dbReady } from "./storage";
 import { registerSchema, loginSchema } from "@shared/schema";
 import { setupAuth } from "./auth";
+import { getBaseUrl } from "./config";
+import { buildDestinations, SUPPORTED_PLATFORMS, resolveDestinationMap } from "./social-destinations";
+import { discoverLinkedInOrganizations } from "./publish-service";
+import { isPublishWorkerEnabled } from "./marketing-publish-worker";
 
 const MemoryStore = createMemoryStore(session);
+
+// LinkedIn OAuth scopes. Personal posting always uses w_member_social.
+// When the LinkedIn app has been approved for organization (Page) admin
+// access, set LINKEDIN_ORG_SCOPE=1 (or to the exact scope string) so the
+// connect flow also requests it and can discover the user's LinkedIn Pages.
+function linkedinScope(): string {
+  const base = "openid profile w_member_social email";
+  const orgEnv = process.env.LINKEDIN_ORG_SCOPE;
+  if (!orgEnv) return base;
+  // Allow either an opt-in flag ("1"/"true") using sensible defaults, or an
+  // explicit space-separated scope string supplied by the operator.
+  const orgScopes = /^(1|true|yes)$/i.test(orgEnv.trim())
+    ? "r_organization_admin rw_organization_admin"
+    : orgEnv.trim();
+  return `${base} ${orgScopes}`;
+}
 
 function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (req.isAuthenticated()) return next();
@@ -508,8 +528,8 @@ export async function registerRoutes(server: Server, app: Express) {
           quantity: 1,
         }],
         metadata: { userId: String(req.user!.id), pack, credits: String(p.credits), type: "credits" },
-        success_url: `${process.env.BASE_URL || "http://localhost:5000"}/#/dashboard?credits=success`,
-        cancel_url: `${process.env.BASE_URL || "http://localhost:5000"}/#/dashboard?credits=cancelled`,
+        success_url: `${getBaseUrl(req)}/#/dashboard?credits=success`,
+        cancel_url: `${getBaseUrl(req)}/#/dashboard?credits=cancelled`,
       });
       // Record pending purchase
       await storage.createCreditPurchase({
@@ -529,7 +549,7 @@ export async function registerRoutes(server: Server, app: Express) {
       const p = CREDIT_PACKS[pack];
       if (!p) return res.status(400).json({ message: "Invalid pack" });
       if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET)
-        return res.status(500).json({ message: "Razorpay not configured" });
+        return res.status(503).json({ message: "Razorpay is not configured. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in your environment." });
       const rp = new Razorpay({ key_id: process.env.RAZORPAY_KEY_ID, key_secret: process.env.RAZORPAY_KEY_SECRET });
       // Convert USD cents to INR paise approximately (1 USD \u2248 83 INR)
       const amountInr = p.amount * 83;
@@ -969,22 +989,72 @@ Now respond to the user's latest message with the depth and specificity of a rea
     }
   });
 
+  // Map a free-text platform label (as shown in the composer) to a connection key.
+  function platformKeyFromLabel(platform: string): string {
+    const p = String(platform || "").toLowerCase();
+    if (p.includes("linkedin")) return "linkedin";
+    if (p.includes("instagram")) return "instagram";
+    if (p.includes("facebook")) return "facebook";
+    if (p.includes("youtube")) return "youtube";
+    if (p.includes("tiktok")) return "tiktok";
+    if (p.includes("twitter") || p === "x" || p.includes("x /")) return "twitter";
+    return SUPPORTED_PLATFORMS.includes(p) ? p : "twitter";
+  }
+
   app.post("/api/bots/marketing/schedule", requireAuth, async (req: Request, res: Response) => {
     try {
-      const { content, platform, scheduledFor } = req.body;
+      const { content, platform, scheduledFor, destinations, destinationIds } = req.body;
       if (!content || !platform) {
         return res.status(400).json({ message: "content and platform are required" });
       }
 
+      const userId = req.user!.id;
+      const platformKey = platformKeyFromLabel(platform);
+
+      // Build the per-platform selection map. Precedence:
+      //   1. explicit `destinations` map { platform: string[] }
+      //   2. explicit `destinationIds` array (applied to this post's platform)
+      //   3. Marketing Bot saved defaults (resolved at creation time)
+      let selection: Record<string, string[]> = {};
+      if (destinations && typeof destinations === "object" && !Array.isArray(destinations)) {
+        for (const [pk, ids] of Object.entries(destinations)) {
+          if (SUPPORTED_PLATFORMS.includes(pk) && Array.isArray(ids)) {
+            selection[pk] = (ids as unknown[]).filter((x) => typeof x === "string").map(String);
+          }
+        }
+      } else if (Array.isArray(destinationIds)) {
+        selection[platformKey] = destinationIds.filter((x: unknown) => typeof x === "string").map(String);
+      } else {
+        // Fall back to saved Marketing Bot defaults for this post's platform.
+        const defaults = await getMarketingDestinationDefaults(userId);
+        if (Array.isArray(defaults[platformKey]) && defaults[platformKey].length) {
+          selection[platformKey] = defaults[platformKey];
+        }
+      }
+
+      const connections = await storage.getSocialConnections(userId);
+      const { resolved, errors } = resolveDestinationMap(connections as any, selection);
+
+      // Reject explicit selections that fail validation (disconnected / unsupported type).
+      // Defaults that no longer resolve are tolerated (best-effort) — explicit intent is not.
+      const wasExplicit =
+        (destinations && typeof destinations === "object" && !Array.isArray(destinations)) ||
+        Array.isArray(destinationIds);
+      if (wasExplicit && errors.length) {
+        return res.status(400).json({ message: errors.join(" "), errors });
+      }
+
       const post = await storage.createScheduledPost({
-        userId: req.user!.id,
+        userId,
         content,
         platform,
         status: "scheduled",
         scheduledFor: scheduledFor || null,
-      });
+        destinations: resolved.length ? JSON.stringify(resolved) : null,
+        destinationPlatform: resolved.length ? resolved[0].platform : platformKey,
+      } as any);
 
-      res.json(post);
+      res.json({ ...post, destinations: resolved });
     } catch (err: any) {
       console.error("Schedule post error:", err);
       res.status(500).json({ message: err.message || "Failed to schedule post" });
@@ -994,10 +1064,117 @@ Now respond to the user's latest message with the depth and specificity of a rea
   app.get("/api/bots/marketing/posts", requireAuth, async (req: Request, res: Response) => {
     try {
       const posts = await storage.getScheduledPosts(req.user!.id);
-      res.json(posts);
+      // Parse the stored destinations JSON for each post so clients get
+      // structured destination data rather than a raw string.
+      const withDestinations = posts.map((p: any) => {
+        let parsed: any[] = [];
+        if (p.destinations) {
+          try {
+            const d = JSON.parse(p.destinations);
+            if (Array.isArray(d)) parsed = d;
+          } catch { /* leave empty on malformed legacy data */ }
+        }
+        let results: any[] = [];
+        if (p.publishResults) {
+          try {
+            const r = JSON.parse(p.publishResults);
+            if (Array.isArray(r)) results = r;
+          } catch { /* ignore malformed */ }
+        }
+        return { ...p, destinations: parsed, publishResults: results };
+      });
+      res.json(withDestinations);
     } catch (err: any) {
       console.error("Get posts error:", err);
       res.status(500).json({ message: err.message || "Failed to fetch posts" });
+    }
+  });
+
+  // Change a scheduled post's status. This is the approval gate for the
+  // publish worker: only `approved` posts that are due get auto-published.
+  // Allowed transitions (intentionally narrow):
+  //   approve : draft|scheduled|failed|partial_failed|cancelled -> approved
+  //   cancel  : any non-terminal                                -> cancelled
+  //   retry   : failed|partial_failed                           -> approved (clears prior results)
+  //   unapprove: approved                                       -> scheduled
+  app.post("/api/bots/marketing/posts/:id/status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const id = parseInt(String(req.params.id), 10);
+      const action = String(req.body?.action || "");
+      if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid post id" });
+
+      const post = await storage.getScheduledPost(id);
+      if (!post || post.userId !== req.user!.id) {
+        return res.status(404).json({ message: "Post not found" });
+      }
+      if (post.status === "publishing") {
+        return res.status(409).json({ message: "Post is currently being published — try again shortly." });
+      }
+
+      let patch: Record<string, any> | null = null;
+      switch (action) {
+        case "approve":
+          if (!["draft", "scheduled", "failed", "partial_failed", "cancelled"].includes(post.status)) {
+            return res.status(400).json({ message: `Cannot approve a post in status "${post.status}".` });
+          }
+          patch = { status: "approved", approvedAt: new Date().toISOString(), lastError: null };
+          break;
+        case "unapprove":
+          if (post.status !== "approved") {
+            return res.status(400).json({ message: `Only approved posts can be unapproved (status is "${post.status}").` });
+          }
+          patch = { status: "scheduled", approvedAt: null };
+          break;
+        case "cancel":
+          if (["published", "cancelled"].includes(post.status)) {
+            return res.status(400).json({ message: `Cannot cancel a post in status "${post.status}".` });
+          }
+          patch = { status: "cancelled" };
+          break;
+        case "retry":
+          if (!["failed", "partial_failed"].includes(post.status)) {
+            return res.status(400).json({ message: `Only failed posts can be retried (status is "${post.status}").` });
+          }
+          // Re-approve so the worker picks it up again; clear stale results.
+          patch = { status: "approved", approvedAt: new Date().toISOString(), lastError: null, publishResults: null };
+          break;
+        default:
+          return res.status(400).json({ message: "action must be one of: approve, unapprove, cancel, retry" });
+      }
+
+      const updated = await storage.updateScheduledPost(id, patch as any);
+      res.json({ ...updated, workerEnabled: isPublishWorkerEnabled() });
+    } catch (err: any) {
+      console.error("Post status change error:", err);
+      res.status(500).json({ message: err.message || "Failed to update post status" });
+    }
+  });
+
+  // DRY-RUN: report which of THIS USER's posts are approved + due for publish,
+  // WITHOUT publishing anything. Safe to call anytime; never contacts a social
+  // platform. Helps verify scheduling/approval before enabling the worker.
+  app.get("/api/bots/marketing/publish-status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const posts = await storage.getScheduledPosts(req.user!.id);
+      const nowMs = Date.now();
+      const isDue = (p: any) => !p.scheduledFor || new Date(p.scheduledFor).getTime() <= nowMs;
+      const counts: Record<string, number> = {};
+      for (const p of posts) counts[p.status] = (counts[p.status] || 0) + 1;
+      const dueApproved = posts.filter((p: any) => p.status === "approved" && isDue(p));
+      res.json({
+        workerEnabled: isPublishWorkerEnabled(),
+        intervalMs: parseInt(process.env.MARKETING_PUBLISH_WORKER_INTERVAL_MS || "60000", 10) || 60000,
+        statusCounts: counts,
+        dueNow: dueApproved.map((p: any) => ({
+          id: p.id,
+          platform: p.platform,
+          scheduledFor: p.scheduledFor,
+          destinationCount: (() => { try { return (JSON.parse(p.destinations || "[]") || []).length; } catch { return 0; } })(),
+        })),
+      });
+    } catch (err: any) {
+      console.error("Publish-status error:", err);
+      res.status(500).json({ message: err.message || "Failed to compute publish status" });
     }
   });
 
@@ -1142,7 +1319,7 @@ Now respond to the user's latest message with the depth and specificity of a rea
       const { platform, accountName } = req.body;
       if (!platform) return res.status(400).json({ message: "Platform is required" });
 
-      const validPlatforms = ["linkedin", "instagram", "tiktok", "facebook", "twitter", "youtube"];
+      const validPlatforms = ["linkedin", "instagram", "tiktok", "facebook", "twitter", "twitter_oauth1", "youtube"];
       if (!validPlatforms.includes(platform)) {
         return res.status(400).json({ message: "Invalid platform" });
       }
@@ -1152,28 +1329,34 @@ Now respond to the user's latest message with the depth and specificity of a rea
       const linkedinState = process.env.LINKEDIN_CLIENT_ID
         ? Buffer.from(`${req.user!.id}:${Date.now()}:${Math.random().toString(36).slice(2)}`).toString("base64")
         : undefined;
-      const linkedinRedirect = `${process.env.BASE_URL || "http://localhost:5000"}/api/social/linkedin/callback`;
+      const linkedinRedirect = `${getBaseUrl(req)}/api/social/linkedin/callback`;
       const oauthConfig: Record<string, { clientId?: string; authUrl?: string; oauthStart?: string }> = {
         linkedin: {
           clientId: process.env.LINKEDIN_CLIENT_ID,
           authUrl: process.env.LINKEDIN_CLIENT_ID
-            ? `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${process.env.LINKEDIN_CLIENT_ID}&redirect_uri=${encodeURIComponent(linkedinRedirect)}&scope=${encodeURIComponent("openid profile w_member_social email")}&state=${linkedinState}`
+            ? `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${process.env.LINKEDIN_CLIENT_ID}&redirect_uri=${encodeURIComponent(linkedinRedirect)}&scope=${encodeURIComponent(linkedinScope())}&state=${linkedinState}`
             : undefined,
         },
         facebook: {
           clientId: process.env.FACEBOOK_APP_ID,
           authUrl: process.env.FACEBOOK_APP_ID
-            ? `https://www.facebook.com/v18.0/dialog/oauth?client_id=${process.env.FACEBOOK_APP_ID}&redirect_uri=${encodeURIComponent(process.env.BASE_URL || "http://localhost:5000")}/api/social/facebook/callback&scope=pages_manage_posts,pages_read_engagement`
+            ? `https://www.facebook.com/v18.0/dialog/oauth?client_id=${process.env.FACEBOOK_APP_ID}&redirect_uri=${encodeURIComponent(getBaseUrl(req))}/api/social/facebook/callback&scope=pages_manage_posts,pages_read_engagement`
             : undefined,
         },
         twitter: {
           clientId: process.env.TWITTER_CLIENT_ID,
           oauthStart: process.env.TWITTER_CLIENT_ID ? "/api/social/twitter/oauth-start" : undefined,
         },
+        // Pseudo-platform key "twitter_oauth1" — frontend can request this
+        // explicitly when it wants the OAuth 1.0a (media-upload) flow.
+        twitter_oauth1: {
+          clientId: process.env.TWITTER_API_KEY || process.env.TWITTER_CLIENT_ID,
+          oauthStart: (process.env.TWITTER_API_KEY || process.env.TWITTER_CLIENT_ID) ? "/api/social/twitter/oauth1-start" : undefined,
+        },
         instagram: {
-          clientId: process.env.FACEBOOK_APP_ID,
-          // Instagram is connected via Facebook OAuth (Graph API)
-          oauthStart: process.env.FACEBOOK_APP_ID ? "/api/social/facebook/oauth-start" : undefined,
+          clientId: process.env.FACEBOOK_APP_ID || process.env.META_APP_ID,
+          // Instagram has its own first-class start/callback (Meta Graph API).
+          oauthStart: (process.env.FACEBOOK_APP_ID || process.env.META_APP_ID) ? "/api/social/instagram/oauth-start" : undefined,
         },
         youtube: {
           clientId: process.env.GOOGLE_CLIENT_ID,
@@ -1184,6 +1367,16 @@ Now respond to the user's latest message with the depth and specificity of a rea
 
       const config = oauthConfig[platform];
 
+      // LinkedIn must use real OAuth — there is no demo posting path for it.
+      // Surface a clear, actionable error instead of silently demo-connecting
+      // so the Connect button shows a visible reason when creds are missing.
+      if (platform === "linkedin" && !process.env.LINKEDIN_CLIENT_ID) {
+        return res.status(400).json({
+          message: "LinkedIn isn't configured yet. Add LINKEDIN_CLIENT_ID and LINKEDIN_CLIENT_SECRET in the server environment to enable connecting.",
+          configured: false,
+        });
+      }
+
       // If real OAuth is configured, return the auth URL for redirect
       if (config?.authUrl) {
         return res.json({ redirect: config.authUrl });
@@ -1191,7 +1384,12 @@ Now respond to the user's latest message with the depth and specificity of a rea
       // For PKCE platforms (Twitter) and platforms needing dynamic state (Google/YouTube, Facebook/Instagram),
       // tell the frontend to call the oauth-start endpoint to get the auth URL.
       if (config?.oauthStart) {
-        return res.json({ usePkce: true, oauthStartUrl: config.oauthStart });
+        // Tell the frontend which OAuth variant it is initiating so the UI
+        // can label connect buttons (e.g. "Connect X for media upload").
+        const authVersion = platform === "twitter_oauth1"
+          ? "oauth1"
+          : (platform === "twitter" ? "oauth2_pkce" : "oauth2");
+        return res.json({ usePkce: true, oauthStartUrl: config.oauthStart, authVersion });
       }
 
       // ADMIN ACCOUNTS: require real OAuth — no demo connects
@@ -1205,11 +1403,13 @@ Now respond to the user's latest message with the depth and specificity of a rea
       // Placeholder platform avatars (used when no real profile pic available from OAuth)
       const platformAvatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(accountName || req.user!.name)}&background=1E1650&color=fff&size=128&bold=true`;
 
-      // MVP mode: create connection record directly (for demo/testing, non-admin)
-      const hasPages = ["linkedin", "facebook", "youtube"].includes(platform);
+      // MVP mode: create connection record directly (for demo/testing, non-admin).
+      // LinkedIn is intentionally excluded — it always uses real OAuth (guarded
+      // above), so we never fabricate LinkedIn Pages here.
+      const hasPages = ["facebook", "youtube"].includes(platform);
       const demoPages = hasPages ? JSON.stringify([
-        { id: `page_1_${Date.now()}`, name: `${req.user!.name}'s ${platform === "linkedin" ? "Company" : "Business"} Page`, type: "page", pictureUrl: platformAvatar },
-        { id: `page_2_${Date.now()}`, name: `${platform === "linkedin" ? "My Startup" : "Brand Page"}`, type: "page", pictureUrl: platformAvatar },
+        { id: `page_1_${Date.now()}`, name: `${req.user!.name}'s Business Page`, type: "page", pictureUrl: platformAvatar },
+        { id: `page_2_${Date.now()}`, name: `Brand Page`, type: "page", pictureUrl: platformAvatar },
         { id: `profile_${Date.now()}`, name: `${req.user!.name} (Personal Profile)`, type: "profile", pictureUrl: platformAvatar },
       ]) : undefined;
 
@@ -1279,7 +1479,7 @@ p{color:#666;font-size:14px;margin:0}
       }
 
       // Exchange code for access token
-      const redirectUri = `${process.env.BASE_URL || "http://localhost:5000"}/api/social/linkedin/callback`;
+      const redirectUri = `${getBaseUrl(req)}/api/social/linkedin/callback`;
       const tokenRes = await fetch("https://www.linkedin.com/oauth/v2/accessToken", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -1314,6 +1514,12 @@ p{color:#666;font-size:14px;margin:0}
       }
       const profile: any = await profileRes.json();
 
+      // Best-effort: discover LinkedIn Pages (organizations) the member admins.
+      // Only succeeds if the app/token has an organization scope; otherwise
+      // returns no pages (and a permission note) without failing the connect.
+      const orgDiscovery = await discoverLinkedInOrganizations(accessToken);
+      const pagesJson = orgDiscovery.pages.length ? JSON.stringify(orgDiscovery.pages) : null;
+
       // Store connection with real token and real profile pic
       await storage.connectSocial({
         userId,
@@ -1324,12 +1530,16 @@ p{color:#666;font-size:14px;margin:0}
         profilePictureUrl: profile.picture || null,
         profileUrl: `https://www.linkedin.com/in/${profile.sub}`,
         accountType: "profile",
+        pages: pagesJson,
         accessToken,
         refreshToken: refreshToken || null,
         expiresAt: new Date(Date.now() + expiresIn * 1000).toISOString(),
       });
 
-      res.type("html").send(renderPopupResult(true, `Welcome, ${profile.name}. You can now post to LinkedIn from ToolsYourWay.`));
+      const pageMsg = orgDiscovery.pages.length
+        ? ` Found ${orgDiscovery.pages.length} LinkedIn Page${orgDiscovery.pages.length === 1 ? "" : "s"}.`
+        : "";
+      res.type("html").send(renderPopupResult(true, `Welcome, ${profile.name}. You can now post to LinkedIn from ToolsYourWay.${pageMsg}`));
     } catch (e: any) {
       console.error("LinkedIn callback error:", e);
       res.type("html").send(`<!doctype html><html><body><p>Error: ${e.message}</p><script>window.close();</script></body></html>`);
@@ -1342,8 +1552,8 @@ p{color:#666;font-size:14px;margin:0}
       return res.status(400).json({ message: "LINKEDIN_CLIENT_ID not configured", configured: false });
     }
     const state = Buffer.from(`${req.user!.id}:${Date.now()}:${Math.random().toString(36).slice(2)}`).toString("base64");
-    const redirectUri = `${process.env.BASE_URL || "http://localhost:5000"}/api/social/linkedin/callback`;
-    const authUrl = `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${process.env.LINKEDIN_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent("openid profile w_member_social email")}&state=${state}`;
+    const redirectUri = `${getBaseUrl(req)}/api/social/linkedin/callback`;
+    const authUrl = `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${process.env.LINKEDIN_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(linkedinScope())}&state=${state}`;
     res.json({ authUrl, state, configured: true });
   });
 
@@ -1384,6 +1594,104 @@ p{color:#666;font-size:14px;margin:0}
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ message: "Disconnect failed" });
+    }
+  });
+
+  // ============================================================
+  // SOCIAL DESTINATIONS (Marketing Bot — profile / page / channel selection)
+  // ============================================================
+  // Read the Marketing Bot's saved default destination selections.
+  // Stored inside botConfigs(config) as { destinations: { [platform]: string[] } }.
+  async function getMarketingDestinationDefaults(userId: number): Promise<Record<string, string[]>> {
+    const configs = await storage.getBotConfigs(userId);
+    const marketing = configs.find((c: any) => c.botType === "marketing");
+    if (!marketing?.config) return {};
+    try {
+      const parsed = JSON.parse(marketing.config);
+      const d = parsed?.destinations;
+      return d && typeof d === "object" ? d : {};
+    } catch {
+      return {};
+    }
+  }
+
+  // Re-run LinkedIn Page (organization) discovery for the connected user using
+  // the stored token — no re-auth required. Updates the stored `pages` so the
+  // destinations list refreshes. Never returns tokens.
+  app.post("/api/social/linkedin/refresh-pages", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const connections = await storage.getSocialConnections(req.user!.id);
+      const linkedin = connections.find((c: any) => c.platform === "linkedin" && c.status === "connected");
+      if (!linkedin?.accessToken) {
+        return res.status(400).json({ message: "Connect LinkedIn first.", connected: false });
+      }
+      const discovery = await discoverLinkedInOrganizations(linkedin.accessToken);
+      await storage.connectSocial({
+        userId: req.user!.id,
+        platform: "linkedin",
+        pages: discovery.pages.length ? JSON.stringify(discovery.pages) : null,
+      });
+      res.json({
+        success: true,
+        pageCount: discovery.pages.length,
+        requiresPermission: discovery.requiresPermission,
+        note: discovery.note,
+      });
+    } catch (err: any) {
+      console.error("LinkedIn refresh-pages error:", err);
+      res.status(500).json({ message: "Failed to refresh LinkedIn Pages" });
+    }
+  });
+
+  // GET normalized destinations grouped by platform for the current user.
+  app.get("/api/social/destinations", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const connections = await storage.getSocialConnections(req.user!.id);
+      const defaults = await getMarketingDestinationDefaults(req.user!.id);
+      const platforms = buildDestinations(connections as any, defaults);
+      res.json({ platforms });
+    } catch (err: any) {
+      console.error("Destinations fetch error:", err);
+      res.status(500).json({ message: "Failed to fetch destinations" });
+    }
+  });
+
+  // Save Marketing Bot default destination selections per platform.
+  // Body: { destinations: { linkedin: ["urn:...","page_1"], twitter: ["123"] } }
+  // No secrets stored — only destination IDs the user chose.
+  app.post("/api/social/destinations/defaults", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const incoming = req.body?.destinations;
+      if (!incoming || typeof incoming !== "object" || Array.isArray(incoming)) {
+        return res.status(400).json({ message: "destinations object is required" });
+      }
+      // Sanitize: only string platform keys -> array of string ids.
+      const clean: Record<string, string[]> = {};
+      for (const [platform, ids] of Object.entries(incoming)) {
+        if (!SUPPORTED_PLATFORMS.includes(platform)) continue;
+        if (!Array.isArray(ids)) continue;
+        clean[platform] = ids.filter((x) => typeof x === "string").map(String).slice(0, 50);
+      }
+
+      const configs = await storage.getBotConfigs(req.user!.id);
+      const marketing = configs.find((c: any) => c.botType === "marketing");
+      let configObj: any = {};
+      if (marketing?.config) {
+        try { configObj = JSON.parse(marketing.config); } catch { configObj = {}; }
+      }
+      configObj.destinations = clean;
+
+      await storage.upsertBotConfig({
+        userId: req.user!.id,
+        botType: "marketing",
+        status: marketing?.status || "inactive",
+        config: JSON.stringify(configObj),
+      } as any);
+
+      res.json({ success: true, destinations: clean });
+    } catch (err: any) {
+      console.error("Save destination defaults error:", err);
+      res.status(500).json({ message: "Failed to save destinations" });
     }
   });
 
@@ -1536,7 +1844,7 @@ p{color:#666;font-size:14px;margin:0}
 
       const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
       const user = req.user!;
-      const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get("host")}`;
+      const baseUrl = getBaseUrl(req);
 
       const session = await stripe.checkout.sessions.create({
         mode: "subscription",
@@ -1784,8 +2092,8 @@ p{color:#666;font-size:14px;margin:0}
             description: `ToolsYourWay - ${selectedBots.length} bots`,
           }],
           application_context: {
-            return_url: `${process.env.BASE_URL || "http://localhost:5000"}/#/dashboard?payment=success`,
-            cancel_url: `${process.env.BASE_URL || "http://localhost:5000"}/#/pricing`,
+            return_url: `${getBaseUrl(req)}/#/dashboard?payment=success`,
+            cancel_url: `${getBaseUrl(req)}/#/pricing`,
           },
         }),
       });
@@ -1826,7 +2134,7 @@ p{color:#666;font-size:14px;margin:0}
           currency: "USD",
           customer: { first_name: req.user!.name, email: req.user!.email },
           source: { id: "src_all" },
-          redirect: { url: `${process.env.BASE_URL || "http://localhost:5000"}/api/payments/tap/callback?userId=${req.user!.id}&bots=${selectedBots.join(",")}` },
+          redirect: { url: `${getBaseUrl(req)}/api/payments/tap/callback?userId=${req.user!.id}&bots=${selectedBots.join(",")}` },
           description: `ToolsYourWay - ${selectedBots.length} bots`,
           metadata: {
             userId: req.user!.id,
@@ -1875,8 +2183,8 @@ p{color:#666;font-size:14px;margin:0}
           currency: "USD",
           description: `ToolsYourWay - ${selectedBots.length} bots`,
           customer: { given_names: req.user!.name, email: req.user!.email },
-          success_redirect_url: `${process.env.BASE_URL || "http://localhost:5000"}/#/dashboard?payment=success`,
-          failure_redirect_url: `${process.env.BASE_URL || "http://localhost:5000"}/#/pricing`,
+          success_redirect_url: `${getBaseUrl(req)}/#/dashboard?payment=success`,
+          failure_redirect_url: `${getBaseUrl(req)}/#/pricing`,
         }),
       });
       const invoice = await invoiceRes.json() as { invoice_url?: string };

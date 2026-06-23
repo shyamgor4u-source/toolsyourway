@@ -4,6 +4,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { storage } from "./storage";
 import { Resend } from "resend";
+import { publishLinkedIn, publishTwitter } from "./publish-service";
 
 // ============================================================
 // VC / INVESTOR DIRECTORIES (pre-built, updateable)
@@ -591,69 +592,60 @@ Mix content types. Aim for 1 post per day. Make topics SPECIFIC (not "share tips
     }
   });
 
-  // LinkedIn: post to user's feed (requires w_member_social scope)
+  // LinkedIn: post to user's profile feed or to a LinkedIn Page/Organization.
+  // Pass `destinationId` (an organization id) + `destinationType: "organization"`
+  // to publish as a Page; omit for the personal profile (default, backward-compatible).
+  // Requires w_member_social (profile) and w_organization_social (page) scopes.
   app.post("/api/publish/linkedin-post", requireAuth, requireActiveAccess, async (req: Request, res: Response) => {
     try {
-      const { text } = req.body as any;
+      const { text, destinationId, destinationType } = req.body as any;
       if (!text) return res.status(400).json({ message: "text required" });
       const connections = await storage.getSocialConnections(req.user!.id);
       const linkedin = connections.find((c: any) => c.platform === "linkedin" && c.status === "connected" && c.accessToken);
       if (!linkedin?.accessToken) {
         return res.status(400).json({ message: "Connect your LinkedIn account first (requires w_member_social scope).", needsConnect: true });
       }
-      // Fetch user's LinkedIn URN
-      const userInfoRes = await fetch("https://api.linkedin.com/v2/userinfo", {
-        headers: { Authorization: `Bearer ${linkedin.accessToken}` },
-      });
-      if (!userInfoRes.ok) return res.status(400).json({ message: "LinkedIn token expired. Reconnect." });
-      const userInfo: any = await userInfoRes.json();
-      const authorUrn = `urn:li:person:${userInfo.sub}`;
 
-      const postRes = await fetch("https://api.linkedin.com/v2/ugcPosts", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${linkedin.accessToken}`,
-          "Content-Type": "application/json",
-          "X-Restli-Protocol-Version": "2.0.0",
-        },
-        body: JSON.stringify({
-          author: authorUrn,
-          lifecycleState: "PUBLISHED",
-          specificContent: {
-            "com.linkedin.ugc.ShareContent": {
-              shareCommentary: { text },
-              shareMediaCategory: "NONE",
-            },
-          },
-          visibility: { "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC" },
-        }),
+      const asOrganization = destinationType === "organization" || destinationType === "page";
+      const outcome = await publishLinkedIn(linkedin as any, text, {
+        asOrganization,
+        organizationId: asOrganization ? destinationId : undefined,
       });
-      if (!postRes.ok) {
-        const errText = await postRes.text();
-        return res.status(postRes.status).json({ message: `LinkedIn error: ${errText.slice(0, 200)}` });
+      if (!outcome.ok) {
+        return res.status(outcome.code === "not_connected" ? 400 : 502).json({ message: outcome.message });
       }
-      const posted: any = await postRes.json();
-      res.json({ success: true, postId: posted.id, url: `https://www.linkedin.com/feed/update/${posted.id}` });
+      res.json({ success: true, postId: outcome.id, url: outcome.url });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }
   });
 
   // Twitter: post a tweet or thread (requires tweet.write scope)
+  // For tweets with media attached, prefer POST /api/publish/twitter-with-media,
+  // which performs the OAuth 1.0a media upload first and then attaches media_ids
+  // here. `mediaIds` (already-uploaded ids) can be passed for the first tweet.
   app.post("/api/publish/twitter-post", requireAuth, requireActiveAccess, async (req: Request, res: Response) => {
     try {
-      const { text, thread } = req.body as any; // thread = array of tweets
+      const { text, thread, mediaIds, destinationType } = req.body as any; // thread = array of tweets
+      // X has no Page concept — only the connected profile can post.
+      if (destinationType && destinationType !== "profile") {
+        return res.status(400).json({ message: "X / Twitter only supports posting to your profile. Pages are not available." });
+      }
       const connections = await storage.getSocialConnections(req.user!.id);
       const twitter = connections.find((c: any) => c.platform === "twitter" && c.status === "connected" && c.accessToken);
       if (!twitter?.accessToken) {
-        return res.status(400).json({ message: "Connect your X (Twitter) account first.", needsConnect: true });
+        return res.status(400).json({ message: "Connect your X (Twitter) account first (OAuth 2.0 PKCE).", needsConnect: true });
       }
       const tweets = Array.isArray(thread) && thread.length > 0 ? thread : [text];
       let lastId: string | undefined;
       const posted: any[] = [];
-      for (const tweetText of tweets) {
+      for (let i = 0; i < tweets.length; i++) {
+        const tweetText = tweets[i];
         const body: any = { text: tweetText };
         if (lastId) body.reply = { in_reply_to_tweet_id: lastId };
+        if (i === 0 && Array.isArray(mediaIds) && mediaIds.length > 0) {
+          body.media = { media_ids: mediaIds };
+        }
         const resp = await fetch("https://api.twitter.com/2/tweets", {
           method: "POST",
           headers: {

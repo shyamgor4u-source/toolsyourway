@@ -98,6 +98,8 @@ async function initDb() {
       status TEXT NOT NULL DEFAULT 'scheduled',
       scheduled_for TEXT,
       published_at TEXT,
+      destinations TEXT,
+      destination_platform TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE TABLE IF NOT EXISTS prospects (
@@ -251,6 +253,19 @@ async function initDb() {
     "ALTER TABLE social_connections ADD COLUMN display_name TEXT",
     "ALTER TABLE social_connections ADD COLUMN profile_url TEXT",
     "ALTER TABLE social_connections ADD COLUMN follower_count INTEGER",
+    // OAuth 1.0a fields for X/Twitter (used for media upload via v1.1 endpoints)
+    "ALTER TABLE social_connections ADD COLUMN oauth1_token TEXT",
+    "ALTER TABLE social_connections ADD COLUMN oauth1_token_secret TEXT",
+    "ALTER TABLE social_connections ADD COLUMN auth_version TEXT DEFAULT 'oauth2'",
+    // Per-post destination persistence (Marketing Bot)
+    "ALTER TABLE scheduled_posts ADD COLUMN destinations TEXT",
+    "ALTER TABLE scheduled_posts ADD COLUMN destination_platform TEXT",
+    // Scheduled publish worker bookkeeping (Marketing Bot). All token-free.
+    "ALTER TABLE scheduled_posts ADD COLUMN approved_at TEXT",
+    "ALTER TABLE scheduled_posts ADD COLUMN publish_attempts INTEGER DEFAULT 0",
+    "ALTER TABLE scheduled_posts ADD COLUMN last_attempt_at TEXT",
+    "ALTER TABLE scheduled_posts ADD COLUMN last_error TEXT",
+    "ALTER TABLE scheduled_posts ADD COLUMN publish_results TEXT",
   ];
   for (const sql of migrations) {
     try { await client.execute(sql); } catch (e: any) {
@@ -286,8 +301,15 @@ export interface IStorage {
   upsertBotConfig(data: InsertBotConfig): Promise<BotConfig>;
 
   getScheduledPosts(userId: number): Promise<ScheduledPost[]>;
+  getScheduledPost(id: number): Promise<ScheduledPost | undefined>;
   createScheduledPost(data: InsertScheduledPost): Promise<ScheduledPost>;
   updateScheduledPost(id: number, data: Partial<InsertScheduledPost>): Promise<ScheduledPost | undefined>;
+  // Worker: due posts that are approved and past their scheduled time.
+  getDuePostsForPublish(nowIso: string, limit?: number): Promise<ScheduledPost[]>;
+  // Worker: atomically claim a post (approved -> publishing) so a concurrent
+  // run cannot double-publish. Returns the claimed row, or undefined if it was
+  // already claimed / no longer approved.
+  claimPostForPublish(id: number): Promise<ScheduledPost | undefined>;
 
   getInvoices(userId: number): Promise<Invoice[]>;
   createInvoice(data: InsertInvoice): Promise<Invoice>;
@@ -388,6 +410,11 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(scheduledPosts).where(eq(scheduledPosts.userId, userId));
   }
 
+  async getScheduledPost(id: number) {
+    const rows = await db.select().from(scheduledPosts).where(eq(scheduledPosts.id, id));
+    return rows[0];
+  }
+
   async createScheduledPost(data: InsertScheduledPost) {
     const rows = await db.insert(scheduledPosts).values(data).returning();
     return rows[0];
@@ -395,6 +422,29 @@ export class DatabaseStorage implements IStorage {
 
   async updateScheduledPost(id: number, data: Partial<InsertScheduledPost>) {
     const rows = await db.update(scheduledPosts).set(data).where(eq(scheduledPosts.id, id)).returning();
+    return rows[0];
+  }
+
+  async getDuePostsForPublish(nowIso: string, limit = 25) {
+    // Approved + due (no scheduled time means "send asap once approved").
+    const rows = await db
+      .select()
+      .from(scheduledPosts)
+      .where(sql`${scheduledPosts.status} = 'approved'
+        AND (${scheduledPosts.scheduledFor} IS NULL OR ${scheduledPosts.scheduledFor} <= ${nowIso})`)
+      .limit(limit);
+    return rows;
+  }
+
+  async claimPostForPublish(id: number) {
+    // Conditional update is the lock: only an `approved` row transitions to
+    // `publishing`. On a single-instance deploy this is effectively atomic;
+    // even with overlapping in-process ticks only one update will match.
+    const rows = await db
+      .update(scheduledPosts)
+      .set({ status: "publishing", lastAttemptAt: new Date().toISOString() })
+      .where(sql`${scheduledPosts.id} = ${id} AND ${scheduledPosts.status} = 'approved'`)
+      .returning();
     return rows[0];
   }
 
@@ -417,15 +467,22 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(socialConnections).where(eq(socialConnections.userId, userId));
   }
 
-  async connectSocial(data: { userId: number; platform: string; accountName?: string | null; accountId?: string | null; accountType?: string | null; pages?: string | null; profilePictureUrl?: string | null; displayName?: string | null; profileUrl?: string | null; followerCount?: number | null; accessToken?: string | null; refreshToken?: string | null; expiresAt?: string | null; pageId?: string | null; pageName?: string | null }) {
-    // Upsert — replace if same user+platform exists
+  async connectSocial(data: { userId: number; platform: string; accountName?: string | null; accountId?: string | null; accountType?: string | null; pages?: string | null; profilePictureUrl?: string | null; displayName?: string | null; profileUrl?: string | null; followerCount?: number | null; accessToken?: string | null; refreshToken?: string | null; expiresAt?: string | null; pageId?: string | null; pageName?: string | null; oauth1Token?: string | null; oauth1TokenSecret?: string | null; authVersion?: string | null }) {
+    // Upsert — merge if same user+platform exists. Only overwrite columns
+    // explicitly supplied so that an OAuth 1.0a connect does not clobber the
+    // existing OAuth 2.0 access/refresh token (and vice versa) for the same
+    // platform record.
     const existing = await db.select().from(socialConnections)
       .where(sql`${socialConnections.userId} = ${data.userId} AND ${socialConnections.platform} = ${data.platform}`);
     if (existing[0]) {
-      const rows = await db.update(socialConnections).set({ ...data, status: "connected" }).where(eq(socialConnections.id, existing[0].id)).returning();
+      const patch: Record<string, any> = { status: "connected" };
+      for (const [k, v] of Object.entries(data)) {
+        if (v !== undefined) patch[k] = v;
+      }
+      const rows = await db.update(socialConnections).set(patch as any).where(eq(socialConnections.id, existing[0].id)).returning();
       return rows[0];
     }
-    const rows = await db.insert(socialConnections).values(data).returning();
+    const rows = await db.insert(socialConnections).values(data as any).returning();
     return rows[0];
   }
 

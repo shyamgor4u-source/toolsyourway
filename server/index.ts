@@ -3,6 +3,7 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { startTrialCron } from "./trial-cron";
+import { startMarketingPublishWorker } from "./marketing-publish-worker";
 
 const app = express();
 const httpServer = createServer(app);
@@ -95,5 +96,9 @@ app.use((req, res, next) => {
     log(`serving on port ${port}`);
     // Start background trial nudge/expiry cron
     startTrialCron();
+    // Start the marketing scheduled-publish worker. This is a NO-OP unless
+    // ENABLE_MARKETING_PUBLISH_WORKER=true, so a deploy never silently begins
+    // auto-posting to social platforms.
+    startMarketingPublishWorker();
   });
 })();

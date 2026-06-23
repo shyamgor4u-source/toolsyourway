@@ -9,10 +9,21 @@ After setup, your users can connect their social accounts via OAuth and ToolsYou
 ## Prerequisites
 
 You need:
-- Production domain set up: `https://toolsyourway.com`
+- Production domain set up: `https://www.toolsyourway.com`
 - Render env vars dashboard access
-- Privacy Policy URL: `https://toolsyourway.com/#/privacy` (already live)
-- Terms of Use URL: `https://toolsyourway.com/#/terms` (already live)
+- Privacy Policy URL: `https://www.toolsyourway.com/#/privacy` (already live)
+- Terms of Use URL: `https://www.toolsyourway.com/#/terms` (already live)
+
+### Required: `BASE_URL`
+
+All OAuth callback URLs are built on top of `BASE_URL`. In Render, set:
+
+```
+BASE_URL=https://www.toolsyourway.com
+```
+
+If `BASE_URL` is missing in production, callbacks fall back to
+`http://localhost:5000`, which every OAuth provider will reject.
 
 ---
 
@@ -43,7 +54,7 @@ On the **Products** tab, request:
 ```
 LINKEDIN_CLIENT_ID=86abc...
 LINKEDIN_CLIENT_SECRET=WPL_AP...
-BASE_URL=https://toolsyourway.com
+BASE_URL=https://www.toolsyourway.com
 ```
 
 ---
@@ -120,10 +131,17 @@ GOOGLE_CLIENT_SECRET=GOCSPX-abc...
 
 ### Configure OAuth redirect URIs
 1. App dashboard → **Facebook Login → Settings**
-2. **Valid OAuth Redirect URIs:**
-   - `https://toolsyourway.com/api/social/facebook/callback`
+2. **Valid OAuth Redirect URIs** (add all four — Facebook and Instagram each
+   have their own callback):
+   - `https://www.toolsyourway.com/api/social/instagram/oauth/callback`
+   - `http://localhost:5000/api/social/instagram/oauth/callback`
+   - `https://www.toolsyourway.com/api/social/facebook/callback`
    - `http://localhost:5000/api/social/facebook/callback`
 3. Save changes
+
+> Instagram now has a first-class flow: `POST /api/social/instagram/oauth-start`
+> → `GET /api/social/instagram/oauth/callback`. See `docs/INSTAGRAM_SETUP.md`
+> for the full Instagram reference (carousel + reel publishing, multi-account).
 
 ### Add Instagram Graph API
 1. **Add product** → **Instagram → Set up**
@@ -163,26 +181,36 @@ FACEBOOK_APP_SECRET=abc123...
 3. **Subscribe to Basic plan** ($200/mo) — required for `tweet.write` scope
 4. Click **+ Add App** → Name: `ToolsYourWay`
 
-### Configure OAuth 2.0
+### Configure OAuth 2.0 + OAuth 1.0a
 1. App settings → **User authentication settings → Set up**
 2. **App permissions:** **Read and write** (and Direct Message if you want DM later)
 3. **Type of app:** **Web App**
-4. **Callback URI / Redirect URL:**
-   - `https://toolsyourway.com/api/social/twitter/callback`
+4. **Callback URI / Redirect URL** — add **all four**:
+   - `https://www.toolsyourway.com/api/social/twitter/callback` (OAuth 2.0 PKCE — tweet posting)
+   - `https://www.toolsyourway.com/api/social/twitter/oauth1/callback` (OAuth 1.0a — media upload)
    - `http://localhost:5000/api/social/twitter/callback`
-5. **Website URL:** `https://toolsyourway.com`
+   - `http://localhost:5000/api/social/twitter/oauth1/callback`
+5. **Website URL:** `https://www.toolsyourway.com`
 6. Save
 
 ### Get credentials
 1. **Keys and tokens** tab
-2. Under **OAuth 2.0 Client ID and Client Secret**, click **Generate**
-3. Copy **Client ID** and **Client Secret**
+2. Under **OAuth 2.0 Client ID and Client Secret**, click **Generate** → Copy.
+3. Under **Consumer Keys**, copy the **API Key** and **API Key Secret** (these are the OAuth 1.0a "consumer key/secret").
 
 ### Add to Render env vars
 ```
+# OAuth 2.0 PKCE (posting text tweets / threads)
 TWITTER_CLIENT_ID=Z3...
 TWITTER_CLIENT_SECRET=abc123...
+
+# OAuth 1.0a (media upload — image / GIF / video)
+# Falls back to TWITTER_CLIENT_ID/_SECRET if unset.
+TWITTER_API_KEY=abc...
+TWITTER_API_SECRET=def...
 ```
+
+> **Why two flows?** The v2 PKCE bearer cannot sign the v1.1 chunked media-upload endpoint, which is still the only stable cross-account way to upload images and videos to X. See [`TWITTER_X_SETUP.md`](./TWITTER_X_SETUP.md) for the full media-upload pipeline (INIT/APPEND/FINALIZE/STATUS) and supported types.
 
 ---
 
@@ -199,7 +227,7 @@ TWITTER_CLIENT_SECRET=abc123...
 |---|---|---|
 | **LinkedIn** | "Post" button on LinkedIn card → drafts text → **Post to LinkedIn** | Post appears on user's feed |
 | **X / Twitter** | (TBD — UI button coming) | Tweet appears on user's profile |
-| **Instagram** | Coming — requires public image URL | Post appears on user's IG feed |
+| **Instagram** | `POST /api/publish/instagram-post` with `{ imageUrl }` (public HTTPS), `{ imageUrls[] }` for carousel, or `{ videoUrl }` for a reel | Post appears on user's IG feed |
 | **YouTube** | Connection test only — video upload coming | Channel info populated |
 
 ## Troubleshooting
