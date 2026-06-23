@@ -273,6 +273,27 @@ export default function UserDashboard() {
               </Link>
             </div>
 
+            {/* Growth Missions CTA — Nexus orchestration */}
+            <Link href="/missions">
+              <Card
+                className="mb-3 cursor-pointer hover:shadow-md transition-shadow border-amber-300/50 bg-gradient-to-r from-amber-50 via-white to-amber-50/40"
+                data-testid="card-missions-cta"
+              >
+                <CardContent className="p-5 flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#1E1650] to-amber-500 flex items-center justify-center flex-shrink-0">
+                    <Target className="w-6 h-6 text-white" />
+                  </div>
+                  <div className="flex-1">
+                    <div className="font-semibold text-base text-foreground">Growth Missions · Nexus</div>
+                    <div className="text-xs text-muted-foreground">
+                      Tell Nexus a goal (“grow LinkedIn to 50K”). It reads your connected profile, plans the campaign, drafts every post with AI image, emails you for review, and only publishes what you approve.
+                    </div>
+                  </div>
+                  <ArrowUpRight className="w-5 h-5 text-muted-foreground" />
+                </CardContent>
+              </Card>
+            </Link>
+
             {/* Outreach Hub CTA */}
             <Link href="/outreach">
               <Card className="mb-6 cursor-pointer hover:shadow-md transition-shadow border-[#E9A820]/40 bg-gradient-to-r from-[#1E1650] to-[#3D309A] text-white" data-testid="card-outreach-cta">

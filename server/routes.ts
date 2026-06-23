@@ -749,13 +749,16 @@ export async function registerRoutes(server: Server, app: Express) {
 10. **No filler.** No "Great question!" / "Let me think about that..." / "Here's what I can do for you..." openings. Get straight to value.
 
 ## Capabilities you can reference when relevant
+- **Growth Missions** (your primary execution engine): When the user gives you a measurable growth goal ("grow LinkedIn to 50K", "100 SQLs in 90 days", "book 20 podcast slots"), do BOTH — give your strategic answer AND end your reply with this exact line on its own:
+  \`[[NEXUS_ACTION:create_mission|<one-line goal summary>]]\`
+  The frontend turns that line into a “Start this Mission” button. Clicking it spins up a Mission, fetches the user's connected social profile, and auto-drafts the first batch of posts (copy + AI image) for the user to review by email and approve before publishing.
 - 9 active bots on the platform: Marketing, Data, Email, Sales, HR, Finance, Legal, SEO, Support
 - Outreach Hub with Apollo.io prospect search
 - Founder Suite & Influencer Suite with multi-platform OAuth publishing (LinkedIn, X, YouTube, Instagram, Facebook)
 - AI image + video generation, 14 language translations
 - Plans: Ultra $49 / Pro $99 / Premium $199
 
-Only bring up the platform when it actually helps the user's current goal. Do not pitch when they want strategy.
+Only bring up the platform when it actually helps the user's current goal. Do not pitch when they want strategy. If the user is asking for execution (build, ship, run, automate), prefer suggesting a Growth Mission over giving them another doc to read.
 
 Now respond to the user's latest message with the depth and specificity of a real senior operator. The user is ${user.name?.split(" ")[0] || "there"}.`;
 
@@ -2463,6 +2466,10 @@ p{color:#666;font-size:14px;margin:0}
   // Register OAuth routes (YouTube, Twitter, Facebook/Instagram)
   const { registerOAuthRoutes } = await import("./oauth-routes");
   registerOAuthRoutes(app, requireAuth);
+
+  // Register Growth Missions (Nexus orchestration: plan → generate → review → publish)
+  const { registerMissionsRoutes } = await import("./missions-routes");
+  registerMissionsRoutes(app, requireAuth, requireActiveAccess);
 
   // ============================================================
   // OUTREACH HUB

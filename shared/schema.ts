@@ -173,6 +173,14 @@ export const scheduledPosts = sqliteTable("scheduled_posts", {
   // JSON array of per-destination outcomes. Never contains tokens. Shape:
   //   { platform, destinationId, displayName, ok, id?, url?, error?, at }
   publishResults: text("publish_results"),
+  // Optional link back to the Growth Mission that authored this post.
+  // null for one-off posts created outside a mission.
+  missionId: integer("mission_id"),
+  // Optional image URL Nexus generated for the post. Stored once at draft
+  // time so the user reviewing the email/UI sees what will go live.
+  imageUrl: text("image_url"),
+  // Persona/role copy was authored under ("war_story" | "hot_take" | etc.).
+  pillar: text("pillar"),
   createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
 });
 
@@ -381,3 +389,60 @@ export const contentCalendar = sqliteTable("content_calendar", {
   createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
 });
 export type ContentCalendarEntry = typeof contentCalendar.$inferSelect;
+
+// ============================================================
+// GROWTH MISSIONS — Nexus-orchestrated end-to-end campaigns
+// ============================================================
+// A Growth Mission is a goal-driven, autonomous campaign that Nexus runs:
+//   plan → generate copy → generate visuals → send for review
+//   → user approves → worker publishes on schedule.
+//
+// Each mission spawns N rows in `scheduled_posts` (status=draft until approved).
+// We DO NOT duplicate post storage here — the missionId on scheduled_posts is
+// the link back, kept loose (no FK) so legacy posts continue to work.
+export const growthMissions = sqliteTable("growth_missions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull().references(() => users.id),
+  // Human-readable mission name (e.g. "LinkedIn 0 → 50K in 60 days").
+  name: text("name").notNull(),
+  // Free-text goal exactly as the user stated it (verbatim from chat).
+  goal: text("goal").notNull(),
+  // Primary platform this mission targets. "linkedin" | "twitter" | etc.
+  platform: text("platform").notNull().default("linkedin"),
+  // Quantitative targets parsed by Nexus.
+  targetMetric: text("target_metric"),       // e.g. "followers"
+  targetValue: integer("target_value"),       // e.g. 50000
+  startValue: integer("start_value"),         // baseline at mission creation
+  // Cadence + timeline.
+  postsPerWeek: integer("posts_per_week").default(5),
+  durationDays: integer("duration_days").default(60),
+  startDate: text("start_date"),              // YYYY-MM-DD
+  endDate: text("end_date"),                  // YYYY-MM-DD
+  // Where to send drafts for human approval.
+  reviewChannel: text("review_channel").default("email"), // email | whatsapp | in_app
+  reviewEmail: text("review_email"),
+  reviewWhatsapp: text("review_whatsapp"),
+  // Authoring direction Nexus uses each batch (positioning, voice, audience).
+  voice: text("voice"),                       // e.g. "warm, contrarian, story-led"
+  audience: text("audience"),                 // e.g. "TA leaders, HR execs, founders"
+  pillars: text("pillars"),                   // JSON array of strings
+  // The full plan Nexus produced at creation time, kept for context on each
+  // batch generation. JSON: { weeks: [...], summary: "..." }.
+  plan: text("plan"),
+  // LinkedIn profile snapshot fetched at creation (so Nexus writes in user's voice).
+  // JSON: { name, headline, summary, industry, location, currentCompany, etc. }
+  profileSnapshot: text("profile_snapshot"),
+  // Lifecycle.
+  //   active     — generating + publishing
+  //   paused     — user paused; worker ignores
+  //   completed  — reached deadline or hit target
+  //   archived
+  status: text("status").notNull().default("active"),
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+  updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+export type GrowthMission = typeof growthMissions.$inferSelect;
+export const insertGrowthMissionSchema = createInsertSchema(growthMissions).omit({
+  id: true, createdAt: true, updatedAt: true,
+});
+export type InsertGrowthMission = z.infer<typeof insertGrowthMissionSchema>;

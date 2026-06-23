@@ -2,9 +2,11 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
+import { useLocation } from "wouter";
+import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { MessageCircle, X, Send, Bot, Sparkles, Minimize2, Mic, UserCog } from "lucide-react";
+import { MessageCircle, X, Send, Bot, Sparkles, Minimize2, Mic, UserCog, Target, Loader2 } from "lucide-react";
 
 const LANGUAGES = [
   { code: "en-IN", label: "English" },
@@ -28,6 +30,20 @@ const SpeechRecognitionAPI =
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  // Nexus may emit [[NEXUS_ACTION:create_mission|<goal>]] at the end of an
+  // assistant turn. We extract the goal here so the UI can render an actionable button.
+  missionGoal?: string;
+}
+
+// Strip [[NEXUS_ACTION:...]] markers out of displayed text and return the
+// extracted goal (if any). The marker is the contract between the system
+// prompt and the frontend — see /api/chat system prompt.
+function extractMissionAction(text: string): { displayText: string; goal?: string } {
+  const m = /\[\[NEXUS_ACTION:create_mission\|([^\]]+)\]\]/.exec(text);
+  if (!m) return { displayText: text };
+  const goal = m[1].trim();
+  const displayText = text.replace(m[0], "").replace(/\n{3,}$/, "\n\n").trim();
+  return { displayText, goal };
 }
 
 const ROLE_PRESETS = [
@@ -50,6 +66,8 @@ export default function AiChat() {
   const [role, setRole] = useState<string>("");
   const [showRolePicker, setShowRolePicker] = useState(false);
   const [activeModel, setActiveModel] = useState<{ label: string; provider: string } | null>(null);
+  const [, nav] = useLocation();
+  const { toast } = useToast();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [isRecording, setIsRecording] = useState(false);
@@ -110,7 +128,8 @@ export default function AiChat() {
       return res.json();
     },
     onSuccess: (data) => {
-      setMessages((prev) => [...prev, { role: "assistant", content: data.reply }]);
+      const { displayText, goal } = extractMissionAction(String(data.reply || ""));
+      setMessages((prev) => [...prev, { role: "assistant", content: displayText, missionGoal: goal }]);
       if (data?.modelLabel) {
         setActiveModel({ label: data.modelLabel, provider: data.provider || "Anthropic" });
       }
@@ -153,6 +172,28 @@ export default function AiChat() {
       );
     });
   };
+
+  // One-click “Start this Mission” — calls /api/missions with the extracted goal
+  // and navigates to the mission detail page once Nexus has drafted the kickoff posts.
+  const startMission = useMutation({
+    mutationFn: async (goal: string) => {
+      const res = await apiRequest("POST", "/api/missions", { goal, platform: "linkedin", postsPerWeek: 5, durationDays: 60 });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({
+        title: "Mission launched",
+        description: `Nexus drafted ${data.posts?.length || 0} kickoff posts. ${data.email?.sent ? "Review email sent." : ""}`,
+      });
+      if (data.mission?.id) {
+        setOpen(false);
+        nav(`/missions/${data.mission.id}`);
+      }
+    },
+    onError: (err: any) => {
+      toast({ title: "Could not start mission", description: err.message || "Try again", variant: "destructive" });
+    },
+  });
 
   return (
     <>
@@ -293,7 +334,7 @@ export default function AiChat() {
             {messages.map((msg, i) => (
               <div
                 key={i}
-                className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+                className={`flex flex-col ${msg.role === "user" ? "items-end" : "items-start"}`}
               >
                 <div
                   className={`max-w-[85%] px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed ${
@@ -305,6 +346,20 @@ export default function AiChat() {
                 >
                   {renderContent(msg.content)}
                 </div>
+                {msg.role === "assistant" && msg.missionGoal && (
+                  <button
+                    onClick={() => startMission.mutate(msg.missionGoal!)}
+                    disabled={startMission.isPending}
+                    className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full bg-gradient-to-r from-primary to-amber-500 text-white shadow-sm hover:shadow-md transition disabled:opacity-60"
+                    data-testid={`button-start-mission-${i}`}
+                  >
+                    {startMission.isPending ? (
+                      <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Nexus is launching…</>
+                    ) : (
+                      <><Target className="h-3.5 w-3.5" /> Start this Mission</>
+                    )}
+                  </button>
+                )}
               </div>
             ))}
 

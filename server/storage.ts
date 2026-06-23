@@ -239,6 +239,35 @@ async function initDb() {
     );
   `);
 
+  // Growth Missions — Nexus-orchestrated end-to-end campaigns
+  await client.execute(`
+    CREATE TABLE IF NOT EXISTS growth_missions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      name TEXT NOT NULL,
+      goal TEXT NOT NULL,
+      platform TEXT NOT NULL DEFAULT 'linkedin',
+      target_metric TEXT,
+      target_value INTEGER,
+      start_value INTEGER,
+      posts_per_week INTEGER DEFAULT 5,
+      duration_days INTEGER DEFAULT 60,
+      start_date TEXT,
+      end_date TEXT,
+      review_channel TEXT DEFAULT 'email',
+      review_email TEXT,
+      review_whatsapp TEXT,
+      voice TEXT,
+      audience TEXT,
+      pillars TEXT,
+      plan TEXT,
+      profile_snapshot TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `);
+
   // Migration: add trial/PAYG columns to existing users table (safe if already exist)
   const migrations = [
     "ALTER TABLE users ADD COLUMN trial_started_at TEXT",
@@ -266,6 +295,10 @@ async function initDb() {
     "ALTER TABLE scheduled_posts ADD COLUMN last_attempt_at TEXT",
     "ALTER TABLE scheduled_posts ADD COLUMN last_error TEXT",
     "ALTER TABLE scheduled_posts ADD COLUMN publish_results TEXT",
+    // Growth Missions linkage on scheduled posts (Nexus orchestration)
+    "ALTER TABLE scheduled_posts ADD COLUMN mission_id INTEGER",
+    "ALTER TABLE scheduled_posts ADD COLUMN image_url TEXT",
+    "ALTER TABLE scheduled_posts ADD COLUMN pillar TEXT",
   ];
   for (const sql of migrations) {
     try { await client.execute(sql); } catch (e: any) {
