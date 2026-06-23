@@ -779,12 +779,14 @@ export default function BotDetailPage() {
         toast({ title: "LinkedIn Pages updated", description: `Found ${data.pageCount} Page${data.pageCount === 1 ? "" : "s"}.` });
       } else if (data.requiresPermission) {
         toast({
-          title: "No LinkedIn Pages found",
-          description: "The LinkedIn app needs organization admin permission to list Pages.",
-          variant: "destructive",
+          title: "Page posting not enabled yet",
+          description: "Your personal LinkedIn profile is ready to post. LinkedIn Pages need the Community Management API \u2014 a separate LinkedIn approval.",
         });
       } else {
-        toast({ title: "No LinkedIn Pages found", description: "Make sure you're an admin of a LinkedIn Page." });
+        toast({
+          title: "No Company Pages to post to",
+          description: "You can still post to your personal LinkedIn profile. Pages only show up if you're an admin of a LinkedIn Company Page.",
+        });
       }
     },
     onError: (err: any) => {
@@ -1154,13 +1156,33 @@ export default function BotDetailPage() {
                                       && p.supportsPage
                                       && !p.destinations.some((d) => d.destinationType !== "profile") && (
                                       <div
-                                        className="mt-1 rounded-lg border border-amber-200 bg-amber-50/60 p-2.5"
+                                        className="mt-1 rounded-lg border border-blue-200 bg-blue-50/60 p-2.5"
                                         data-testid="linkedin-pages-empty"
                                       >
-                                        <p className="text-[11px] text-amber-800">
-                                          No LinkedIn Pages found. Make sure your LinkedIn account is an admin of the Page
-                                          and the LinkedIn app has organization permissions.
+                                        <p className="text-[11px] font-medium text-blue-900 mb-1">
+                                          Posting to your personal profile is ready. Company Pages are optional.
                                         </p>
+                                        <p className="text-[11px] text-blue-800/90 leading-relaxed">
+                                          We didn’t find any LinkedIn Company Pages you administer. Two common reasons:
+                                        </p>
+                                        <ul className="text-[11px] text-blue-800/90 list-disc pl-4 mt-1 space-y-0.5">
+                                          <li>You’re not an admin of any LinkedIn Company Page yet — {" "}
+                                            <a
+                                              href="https://www.linkedin.com/company/setup/new/"
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="underline font-medium"
+                                            >create one here</a>.
+                                          </li>
+                                          <li>Your LinkedIn app only has “Share on LinkedIn”. To list and post to Pages you need the {" "}
+                                            <a
+                                              href="https://learn.microsoft.com/en-us/linkedin/marketing/community-management/community-management-overview"
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="underline font-medium"
+                                            >Community Management API</a> approval from LinkedIn.
+                                          </li>
+                                        </ul>
                                         <Button
                                           variant="outline" size="sm" className="text-[10px] h-6 mt-2"
                                           onClick={() => refreshLinkedInPages.mutate()}
