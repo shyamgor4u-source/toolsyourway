@@ -157,24 +157,9 @@ export default function AiChat() {
     }
   };
 
-  // Don't render if not logged in
-  if (!user) return null;
-
-  // Render markdown-ish bold
-  const renderContent = (text: string) => {
-    return text.split("\n").map((line, i) => {
-      const formatted = line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-      return (
-        <span key={i}>
-          <span dangerouslySetInnerHTML={{ __html: formatted }} />
-          {i < text.split("\n").length - 1 && <br />}
-        </span>
-      );
-    });
-  };
-
   // One-click “Start this Mission” — calls /api/missions with the extracted goal
   // and navigates to the mission detail page once Nexus has drafted the kickoff posts.
+  // NOTE: This hook MUST be declared above any early returns (rules of hooks).
   const startMission = useMutation({
     mutationFn: async (goal: string) => {
       const res = await apiRequest("POST", "/api/missions", { goal, platform: "linkedin", postsPerWeek: 5, durationDays: 60 });
@@ -194,6 +179,23 @@ export default function AiChat() {
       toast({ title: "Could not start mission", description: err.message || "Try again", variant: "destructive" });
     },
   });
+
+  // Don't render if not logged in. MUST come AFTER all hook declarations to
+  // preserve hook call order across renders (React rule).
+  if (!user) return null;
+
+  // Render markdown-ish bold
+  const renderContent = (text: string) => {
+    return text.split("\n").map((line, i) => {
+      const formatted = line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+      return (
+        <span key={i}>
+          <span dangerouslySetInnerHTML={{ __html: formatted }} />
+          {i < text.split("\n").length - 1 && <br />}
+        </span>
+      );
+    });
+  };
 
   return (
     <>
