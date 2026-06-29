@@ -712,6 +712,29 @@ export async function registerRoutes(server: Server, app: Express) {
   // ============================================================
   // NEXUS — AI Chief of Staff (chat endpoint)
   // ============================================================
+  // Persistent chat history endpoint — used by the chat UI on mount to
+  // restore prior conversation across logins / devices.
+  app.get("/api/chat/history", requireAuth, async (req: Request, res: Response) => {
+    const user = req.user!;
+    const { db } = await import("./storage");
+    const { nexusMessages } = await import("../shared/schema");
+    const { eq } = await import("drizzle-orm");
+    const rows = await db.select().from(nexusMessages)
+      .where(eq(nexusMessages.userId, user.id))
+      .orderBy(nexusMessages.createdAt);
+    res.json(rows.slice(-200)); // cap at last 200 messages
+  });
+
+  // Delete entire history ("new conversation")
+  app.delete("/api/chat/history", requireAuth, async (req: Request, res: Response) => {
+    const user = req.user!;
+    const { db } = await import("./storage");
+    const { nexusMessages } = await import("../shared/schema");
+    const { eq } = await import("drizzle-orm");
+    await db.delete(nexusMessages).where(eq(nexusMessages.userId, user.id));
+    res.json({ ok: true });
+  });
+
   app.post("/api/chat", requireAuth, requireActiveAccess, async (req: Request, res: Response) => {
     try {
       const { message, history, role } = req.body as { message?: string; history?: Array<{role: string; content: string}>; role?: string };
@@ -724,6 +747,30 @@ export async function registerRoutes(server: Server, app: Express) {
       const activeBots = bots.filter(b => b.status === "active").map(b => b.botType).join(", ");
       const subscription = await storage.getActiveSubscription(user.id);
 
+      // ----- Pull persistent history + current integration status from DB. -----
+      // We deliberately ignore the `history` field from the request body — server
+      // is the source of truth so a user logging in from a new device sees the
+      // same Nexus context.
+      const { db } = await import("./storage");
+      const { nexusMessages, socialConnections } = await import("../shared/schema");
+      const { eq, and } = await import("drizzle-orm");
+
+      const priorMessages = await db.select().from(nexusMessages)
+        .where(eq(nexusMessages.userId, user.id))
+        .orderBy(nexusMessages.createdAt);
+      // last 30 turns is plenty of context without bloating prompt cost.
+      const recentHistory = priorMessages.slice(-30);
+
+      // Snapshot of which integrations the user has connected. Nexus uses this
+      // to decide whether to suggest connecting something before taking action.
+      const conns = await db.select().from(socialConnections)
+        .where(eq(socialConnections.userId, user.id));
+      const connected = conns
+        .filter(c => c.status === "connected")
+        .map(c => c.platform);
+      const disconnected = ["linkedin", "twitter", "facebook", "instagram", "youtube"]
+        .filter(p => !connected.includes(p));
+
       const roleHint = (role && typeof role === "string" && role.trim().length > 0)
         ? `The user has asked you to act as their **${role.trim()}**. Stay in that role for this conversation. Bring the depth, judgement, and frameworks a top-tier ${role.trim()} would use. You can still leverage the ToolsYourWay platform where relevant, but your primary identity right now is ${role.trim()}.`
         : `If the user asks you to act as their Content Strategist, Recruiter, CFO, Growth PM, Brand Marketer, or any other specialist — adopt that role fully and stay in it. You are role-flexible by design.`;
@@ -735,6 +782,8 @@ export async function registerRoutes(server: Server, app: Express) {
 - Email: ${user.email}
 - Current plan: ${user.plan || "free"} (${subscription ? "active subscription" : "no active subscription"})
 - Active bots on their account: ${activeBots || "none yet"}
+- Connected social platforms: ${connected.length > 0 ? connected.join(", ") : "NONE yet"}
+- Available but NOT connected: ${disconnected.join(", ") || "—"}
 
 ## How to behave (THIS IS CRITICAL)
 1. **Read the full conversation history before responding.** Do not greet the user again if you have already greeted them. Do not ask questions they have already answered. Do not repeat yourself.
@@ -752,6 +801,10 @@ export async function registerRoutes(server: Server, app: Express) {
 - **Growth Missions** (your primary execution engine): When the user gives you a measurable growth goal ("grow LinkedIn to 50K", "100 SQLs in 90 days", "book 20 podcast slots"), do BOTH — give your strategic answer AND end your reply with this exact line on its own:
   \`[[NEXUS_ACTION:create_mission|<one-line goal summary>]]\`
   The frontend turns that line into a “Start this Mission” button. Clicking it spins up a Mission, fetches the user's connected social profile, and auto-drafts the first batch of posts (copy + AI image) for the user to review by email and approve before publishing.
+- **Suggest connecting accounts when needed for the goal**. If the user's goal requires a platform they haven't connected, emit this action on its own line:
+  \`[[NEXUS_ACTION:connect|<platform>]]\`  where platform is one of: linkedin | twitter | facebook | instagram | youtube | gmail
+  The frontend renders a “Connect <platform>” button that takes them straight to the OAuth flow. **NEVER ask the user to manually go connect something — always emit this action so they can click once.** You may emit multiple connect actions in one reply (one per line) when several platforms are needed.
+- **The user must always approve every post before it goes live.** Make this explicit in every plan: drafts → user reviews in-app or email → user clicks Approve → publish worker posts on schedule. NEVER imply you will autopost without approval.
 - 9 active bots on the platform: Marketing, Data, Email, Sales, HR, Finance, Legal, SEO, Support
 - Outreach Hub with Apollo.io prospect search
 - Founder Suite & Influencer Suite with multi-platform OAuth publishing (LinkedIn, X, YouTube, Instagram, Facebook)
@@ -762,16 +815,22 @@ Only bring up the platform when it actually helps the user's current goal. Do no
 
 Now respond to the user's latest message with the depth and specificity of a real senior operator. The user is ${user.name?.split(" ")[0] || "there"}.`;
 
-      // Build messages array from history (last 20 turns for richer context)
+      // Build messages array from PERSISTED history (server is source of truth)
       const messages: Array<{role: "user" | "assistant"; content: string}> = [];
-      if (history && Array.isArray(history)) {
-        for (const h of history.slice(-20)) {
-          if (h && (h.role === "user" || h.role === "assistant") && typeof h.content === "string" && h.content.trim().length > 0) {
-            messages.push({ role: h.role, content: h.content });
-          }
+      for (const h of recentHistory) {
+        if (h.role === "user" || h.role === "assistant") {
+          messages.push({ role: h.role, content: h.content });
         }
       }
       messages.push({ role: "user", content: message });
+
+      // Persist the user turn immediately so it survives if Claude errors out.
+      await db.insert(nexusMessages).values({
+        userId: user.id,
+        role: "user",
+        content: message,
+        asRole: role || null,
+      } as any);
 
       // Model registry — primary + fallback chain. Frontend reads `modelLabel` to display in UI.
       const MODELS: Array<{ id: string; label: string }> = [
@@ -855,6 +914,29 @@ Now respond to the user's latest message with the depth and specificity of a rea
         return { ok: r.ok, status: r.status, json };
       };
 
+      // Helper: persist the assistant reply (including action markers) and
+      // return the JSON response. This is the ONLY exit path for chat — so we
+      // never lose a turn from the transcript even on errors.
+      const finalize = async (reply: string, model: string | null, modelLabel: string | null, provider: string) => {
+        const actionMatch = /\[\[NEXUS_ACTION:([a-z_]+)\|([^\]]+)\]\]/.exec(reply || "");
+        try {
+          await db.insert(nexusMessages).values({
+            userId: user.id,
+            role: "assistant",
+            content: reply,
+            asRole: role || null,
+            model,
+            modelLabel,
+            provider,
+            actionType: actionMatch?.[1] || null,
+            actionPayload: actionMatch?.[2] || null,
+          } as any);
+        } catch (persistErr: any) {
+          console.error("[Nexus] failed to persist assistant turn", persistErr?.message || persistErr);
+        }
+        return res.json({ reply, model, modelLabel, provider });
+      };
+
       try {
         let lastErr: { status: number; json: any } | null = null;
 
@@ -862,16 +944,10 @@ Now respond to the user's latest message with the depth and specificity of a rea
         for (const m of MODELS) {
           const { ok, status, json } = await callClaudeWithRetry(m.id);
           if (ok && json?.content?.[0]?.text) {
-            return res.json({
-              reply: json.content[0].text,
-              model: m.id,
-              modelLabel: m.label,
-              provider: PROVIDER,
-            });
+            return await finalize(json.content[0].text, m.id, m.label, PROVIDER);
           }
           lastErr = { status, json };
           console.error(`[Nexus] Claude API error on ${m.id}`, status, JSON.stringify(json).slice(0, 400));
-          // Walk to next Claude model on model-not-found OR sustained overload (so we don't keep hammering one model).
           const errBody = JSON.stringify(json);
           const modelMissing = status === 404 || /not[_ ]?found|invalid[_ ]?model|unknown.+model/i.test(errBody);
           const overloaded  = [429, 500, 502, 503, 529].includes(status) || /overload|capacity|rate[_ ]?limit/i.test(errBody);
@@ -885,12 +961,7 @@ Now respond to the user's latest message with the depth and specificity of a rea
             const text = json?.choices?.[0]?.message?.content;
             if (ok && typeof text === "string" && text.trim().length > 0) {
               console.log(`[Nexus] Served via OpenAI fallback (${m.id}) after Claude failure.`);
-              return res.json({
-                reply: text,
-                model: m.id,
-                modelLabel: m.label,
-                provider: "OpenAI",
-              });
+              return await finalize(text, m.id, m.label, "OpenAI");
             }
             lastErr = { status, json };
             console.error(`[Nexus] OpenAI fallback failed on ${m.id}`, status, JSON.stringify(json).slice(0, 400));
@@ -899,20 +970,16 @@ Now respond to the user's latest message with the depth and specificity of a rea
 
         // 3) Both providers failed — surface the most informative error.
         const errMsg = lastErr?.json?.error?.message || lastErr?.json?.message;
-        return res.json({
-          reply: `Both Claude and GPT are unreachable right now${lastErr?.status ? ` (last status ${lastErr.status})` : ""}. ${errMsg ? "Underlying error: " + errMsg + ". " : ""}This usually clears in 30–60 seconds — try again.`,
-          model: null,
-          modelLabel: null,
-          provider: PROVIDER,
-        });
+        return await finalize(
+          `Both Claude and GPT are unreachable right now${lastErr?.status ? ` (last status ${lastErr.status})` : ""}. ${errMsg ? "Underlying error: " + errMsg + ". " : ""}This usually clears in 30–60 seconds — try again.`,
+          null, null, PROVIDER,
+        );
       } catch (apiErr: any) {
         console.error("[Nexus] Chat reasoning exception", apiErr?.message || apiErr);
-        return res.json({
-          reply: `I couldn't reach my reasoning engine just now (${apiErr?.message || "network error"}). Try again in a few seconds.`,
-          model: null,
-          modelLabel: null,
-          provider: PROVIDER,
-        });
+        return await finalize(
+          `I couldn't reach my reasoning engine just now (${apiErr?.message || "network error"}). Try again in a few seconds.`,
+          null, null, PROVIDER,
+        );
       }
     } catch (err) {
       console.error("[Nexus] Chat handler error:", err);

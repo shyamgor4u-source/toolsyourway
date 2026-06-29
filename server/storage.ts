@@ -239,6 +239,24 @@ async function initDb() {
     );
   `);
 
+  // Nexus chat history — persistent per-user transcript
+  await client.execute(`
+    CREATE TABLE IF NOT EXISTS nexus_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      as_role TEXT,
+      model TEXT,
+      model_label TEXT,
+      provider TEXT,
+      action_type TEXT,
+      action_payload TEXT,
+      created_at TEXT NOT NULL
+    )
+  `);
+  await client.execute(`CREATE INDEX IF NOT EXISTS idx_nexus_messages_user ON nexus_messages(user_id, created_at)`);
+
   // Growth Missions — Nexus-orchestrated end-to-end campaigns
   await client.execute(`
     CREATE TABLE IF NOT EXISTS growth_missions (

@@ -1,12 +1,15 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { MessageCircle, X, Send, Bot, Sparkles, Minimize2, Mic, UserCog, Target, Loader2 } from "lucide-react";
+import {
+  MessageCircle, X, Send, Bot, Sparkles, Minimize2, Mic, UserCog, Target, Loader2,
+  Linkedin, Twitter, Facebook, Instagram, Youtube, Mail, Plus, History,
+} from "lucide-react";
 
 const LANGUAGES = [
   { code: "en-IN", label: "English" },
@@ -30,20 +33,44 @@ const SpeechRecognitionAPI =
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
-  // Nexus may emit [[NEXUS_ACTION:create_mission|<goal>]] at the end of an
-  // assistant turn. We extract the goal here so the UI can render an actionable button.
-  missionGoal?: string;
+  // Extracted Nexus action markers from the assistant turn:
+  missionGoal?: string;     // [[NEXUS_ACTION:create_mission|<goal>]]
+  connectPlatforms?: string[]; // [[NEXUS_ACTION:connect|<platform>]] (can repeat)
 }
 
-// Strip [[NEXUS_ACTION:...]] markers out of displayed text and return the
-// extracted goal (if any). The marker is the contract between the system
-// prompt and the frontend — see /api/chat system prompt.
-function extractMissionAction(text: string): { displayText: string; goal?: string } {
-  const m = /\[\[NEXUS_ACTION:create_mission\|([^\]]+)\]\]/.exec(text);
-  if (!m) return { displayText: text };
-  const goal = m[1].trim();
-  const displayText = text.replace(m[0], "").replace(/\n{3,}$/, "\n\n").trim();
-  return { displayText, goal };
+// Map of platform key -> display + connect URL + icon. The connect URLs match
+// the OAuth flows wired up in /server/oauth-routes.ts and /server/routes.ts.
+const PLATFORM_META: Record<string, { label: string; icon: any; href: string; color: string }> = {
+  linkedin:  { label: "LinkedIn",  icon: Linkedin,  href: "/api/auth/linkedin",  color: "#0A66C2" },
+  twitter:   { label: "X (Twitter)", icon: Twitter, href: "/api/auth/twitter",   color: "#000000" },
+  facebook:  { label: "Facebook",  icon: Facebook,  href: "/api/auth/facebook",  color: "#1877F2" },
+  instagram: { label: "Instagram", icon: Instagram, href: "/api/auth/instagram", color: "#E4405F" },
+  youtube:   { label: "YouTube",   icon: Youtube,   href: "/api/auth/youtube",   color: "#FF0000" },
+  gmail:     { label: "Gmail",     icon: Mail,      href: "/api/auth/google",    color: "#EA4335" },
+};
+
+// Strip ALL [[NEXUS_ACTION:...]] markers out of the displayed text and return the
+// parsed actions. The marker contract is defined in the /api/chat system prompt.
+function extractActions(text: string): { displayText: string; missionGoal?: string; connectPlatforms?: string[] } {
+  let display = text;
+  let missionGoal: string | undefined;
+  const connectPlatforms: string[] = [];
+  // Collect mission actions (we only show one button)
+  const missionRe = /\[\[NEXUS_ACTION:create_mission\|([^\]]+)\]\]/g;
+  let mm: RegExpExecArray | null;
+  while ((mm = missionRe.exec(text)) !== null) {
+    missionGoal = missionGoal || mm[1].trim();
+  }
+  // Collect connect actions
+  const connectRe = /\[\[NEXUS_ACTION:connect\|([a-z_]+)\]\]/g;
+  let cm: RegExpExecArray | null;
+  while ((cm = connectRe.exec(text)) !== null) {
+    const p = cm[1].trim().toLowerCase();
+    if (PLATFORM_META[p] && !connectPlatforms.includes(p)) connectPlatforms.push(p);
+  }
+  // Strip all markers from displayed text
+  display = display.replace(/\[\[NEXUS_ACTION:[a-z_]+\|[^\]]+\]\]/g, "").replace(/\n{3,}/g, "\n\n").trim();
+  return { displayText: display, missionGoal, connectPlatforms: connectPlatforms.length ? connectPlatforms : undefined };
 }
 
 const ROLE_PRESETS = [
@@ -68,6 +95,76 @@ export default function AiChat() {
   const [activeModel, setActiveModel] = useState<{ label: string; provider: string } | null>(null);
   const [, nav] = useLocation();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  // Load persisted history from the server when the user is logged in.
+  // We do this even before the chat is opened so the badge / unread state is accurate.
+  const historyQuery = useQuery<any[]>({
+    queryKey: ["/api/chat/history"],
+    queryFn: async () => (await apiRequest("GET", "/api/chat/history")).json(),
+    enabled: !!user,
+    staleTime: 60_000,
+  });
+
+  // When history loads, hydrate local message state once (don't overwrite
+  // mid-conversation — only when we have no local messages yet).
+  useEffect(() => {
+    if (!historyQuery.data || messages.length > 0) return;
+    const hydrated: ChatMessage[] = historyQuery.data.map((m: any) => {
+      if (m.role === "assistant") {
+        const parsed = extractActions(m.content || "");
+        return {
+          role: "assistant",
+          content: parsed.displayText,
+          missionGoal: parsed.missionGoal,
+          connectPlatforms: parsed.connectPlatforms,
+        };
+      }
+      return { role: "user", content: m.content || "" };
+    });
+    setMessages(hydrated);
+    // Restore model badge from last assistant turn that had one
+    for (let i = historyQuery.data.length - 1; i >= 0; i--) {
+      const m = historyQuery.data[i];
+      if (m.modelLabel) { setActiveModel({ label: m.modelLabel, provider: m.provider || "Anthropic" }); break; }
+    }
+  }, [historyQuery.data, messages.length]);
+
+  // Auto-open the chat on FIRST login (no history yet) so Nexus proactively
+  // greets the user. Only fires once per session (localStorage flag).
+  useEffect(() => {
+    if (!user || historyQuery.isLoading || !historyQuery.data) return;
+    if (historyQuery.data.length > 0) return; // already chatted before
+    const flagKey = `nexus_welcomed_${user.id}`;
+    if (sessionStorage.getItem(flagKey)) return;
+    sessionStorage.setItem(flagKey, "1");
+    setOpen(true);
+    // Seed an initial assistant message asking "who can I help today"
+    setMessages([
+      {
+        role: "assistant",
+        content:
+          `Hi ${user.name?.split(" ")[0] || "there"}, I'm Nexus — your AI Chief of Staff.\n\n` +
+          `What are we tackling today? A few starting points:\n\n` +
+          `• **Grow on social** (“50K LinkedIn followers in 60 days”)\n` +
+          `• **Hire someone** (“find 5 senior backend engineers in Bangalore”)\n` +
+          `• **Run an outbound campaign** (“50 demo calls booked this month”)\n` +
+          `• **Plan a launch** (“go-to-market for v2 in 4 weeks”)\n\n` +
+          `Tell me the goal in your own words and I'll figure out which tools to connect, build the plan, draft the work, and send it to you for approval before anything ships.`,
+      },
+    ]);
+  }, [user, historyQuery.data, historyQuery.isLoading]);
+
+  // Clear chat history ("New conversation")
+  const clearHistory = useMutation({
+    mutationFn: async () => (await apiRequest("DELETE", "/api/chat/history")).json(),
+    onSuccess: () => {
+      setMessages([]);
+      setActiveModel(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/chat/history"] });
+      toast({ title: "Started a new conversation" });
+    },
+  });
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [isRecording, setIsRecording] = useState(false);
@@ -128,11 +225,18 @@ export default function AiChat() {
       return res.json();
     },
     onSuccess: (data) => {
-      const { displayText, goal } = extractMissionAction(String(data.reply || ""));
-      setMessages((prev) => [...prev, { role: "assistant", content: displayText, missionGoal: goal }]);
+      const parsed = extractActions(String(data.reply || ""));
+      setMessages((prev) => [...prev, {
+        role: "assistant",
+        content: parsed.displayText,
+        missionGoal: parsed.missionGoal,
+        connectPlatforms: parsed.connectPlatforms,
+      }]);
       if (data?.modelLabel) {
         setActiveModel({ label: data.modelLabel, provider: data.provider || "Anthropic" });
       }
+      // Invalidate so the next mount sees the persisted turn
+      queryClient.invalidateQueries({ queryKey: ["/api/chat/history"] });
     },
     onError: () => {
       setMessages((prev) => [
@@ -261,6 +365,16 @@ export default function AiChat() {
             </div>
             <div className="flex items-center gap-1">
               <button
+                onClick={() => {
+                  if (confirm("Start a fresh conversation? Your history will be cleared.")) clearHistory.mutate();
+                }}
+                className="p-1.5 rounded-lg hover:bg-white/10 text-white/70 hover:text-white transition-colors"
+                data-testid="chat-new"
+                title="New conversation"
+              >
+                <Plus className="h-4 w-4" />
+              </button>
+              <button
                 onClick={() => setShowRolePicker(v => !v)}
                 className="p-1.5 rounded-lg hover:bg-white/10 text-white/70 hover:text-white transition-colors"
                 data-testid="chat-role-picker"
@@ -366,6 +480,26 @@ export default function AiChat() {
                       <><Target className="h-3.5 w-3.5" /> Start this Mission</>
                     )}
                   </button>
+                )}
+                {msg.role === "assistant" && msg.connectPlatforms && msg.connectPlatforms.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {msg.connectPlatforms.map((p) => {
+                      const meta = PLATFORM_META[p];
+                      if (!meta) return null;
+                      const Icon = meta.icon;
+                      return (
+                        <a
+                          key={p}
+                          href={meta.href}
+                          className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full text-white shadow-sm hover:shadow-md transition"
+                          style={{ background: meta.color }}
+                          data-testid={`button-connect-${p}-${i}`}
+                        >
+                          <Icon className="h-3.5 w-3.5" /> Connect {meta.label}
+                        </a>
+                      );
+                    })}
+                  </div>
                 )}
               </div>
             ))}

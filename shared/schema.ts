@@ -391,6 +391,36 @@ export const contentCalendar = sqliteTable("content_calendar", {
 export type ContentCalendarEntry = typeof contentCalendar.$inferSelect;
 
 // ============================================================
+// NEXUS CHAT MESSAGES — per-user persistent chat history
+// ============================================================
+// We persist every chat turn so the user sees the same Nexus context
+// across devices, logouts, and refreshes. Conversations are scoped per
+// user (no per-thread separation yet — single rolling thread per user).
+export const nexusMessages = sqliteTable("nexus_messages", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull().references(() => users.id),
+  role: text("role").notNull(),       // "user" | "assistant" | "system"
+  content: text("content").notNull(),
+  // Optional role the user asked Nexus to play (e.g. "LinkedIn Content Strategist").
+  asRole: text("as_role"),
+  // For assistant messages: which model actually served the response.
+  model: text("model"),
+  modelLabel: text("model_label"),
+  provider: text("provider"),
+  // For assistant messages that emitted a [[NEXUS_ACTION:...]] marker,
+  // we store the parsed action so the UI can re-render the inline
+  // "Start this Mission" button after a refresh.
+  actionType: text("action_type"),    // e.g. "create_mission"
+  actionPayload: text("action_payload"),
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+export type NexusMessage = typeof nexusMessages.$inferSelect;
+export const insertNexusMessageSchema = createInsertSchema(nexusMessages).omit({
+  id: true, createdAt: true,
+});
+export type InsertNexusMessage = z.infer<typeof insertNexusMessageSchema>;
+
+// ============================================================
 // GROWTH MISSIONS — Nexus-orchestrated end-to-end campaigns
 // ============================================================
 // A Growth Mission is a goal-driven, autonomous campaign that Nexus runs:
