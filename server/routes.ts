@@ -936,8 +936,11 @@ Now respond to the user's latest message with the depth and specificity of a rea
       }
 
       const resend = new Resend(apiKey);
+      // Use the verified domain — onboarding@resend.dev only delivers to the
+      // Resend account owner in sandbox mode, silently dropping external recipients.
+      const fromAddr = process.env.MAIL_FROM || "ToolsYourWay <hello@toolsyourway.com>";
       const result = await resend.emails.send({
-        from: "ToolsYourWay <onboarding@resend.dev>",
+        from: fromAddr,
         to: [to],
         subject,
         html: body,
@@ -973,7 +976,7 @@ Now respond to the user's latest message with the depth and specificity of a rea
       for (const recipient of recipients) {
         try {
           const result = await resend.emails.send({
-            from: "ToolsYourWay <onboarding@resend.dev>",
+            from: process.env.MAIL_FROM || "ToolsYourWay <hello@toolsyourway.com>",
             to: [recipient],
             subject,
             html: body,

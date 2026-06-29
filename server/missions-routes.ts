@@ -253,23 +253,38 @@ function nextPostingDate(start: Date, dayOffset: number, hour = 9): string {
 
 async function sendReviewEmail(to: string, mission: GrowthMission, posts: ScheduledPost[], baseUrl: string) {
   const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey || !to) return { sent: false, reason: "Email not configured or no recipient" };
+  if (!apiKey) {
+    console.warn("[Missions] RESEND_API_KEY not configured — review email skipped");
+    return { sent: false, reason: "RESEND_API_KEY not configured on server" };
+  }
+  if (!to) return { sent: false, reason: "No recipient email on file" };
+  if (posts.length === 0) return { sent: false, reason: "No drafts to email" };
+
   const resend = new Resend(apiKey);
+  // Use the verified production domain that the rest of the app uses (trial-cron,
+  // founder-influencer, etc). Resend's onboarding@resend.dev test sender is
+  // sandboxed — it can ONLY deliver to the Resend account owner's email, so
+  // any external recipient (like the user's gmail) is silently dropped. Switching
+  // to the verified domain fixes silent non-delivery.
+  const fromAddr = process.env.MAIL_FROM || "ToolsYourWay <hello@toolsyourway.com>";
+
   const rows = posts.map((p) => `
     <tr>
       <td style="padding:14px 0; border-bottom:1px solid #eee;">
         <div style="font-size:12px;color:#888;margin-bottom:4px;">${p.pillar || "Post"} · scheduled ${p.scheduledFor ? new Date(p.scheduledFor).toLocaleDateString() : "TBD"}</div>
         <div style="font-size:14px;line-height:1.5;color:#222;white-space:pre-wrap;">${(p.content || "").slice(0, 600)}${(p.content || "").length > 600 ? "…" : ""}</div>
-        ${p.imageUrl ? `<img src="${p.imageUrl}" style="max-width:320px;margin-top:10px;border-radius:8px;" />` : ""}
+        ${p.imageUrl ? `<img src="${p.imageUrl}" style="max-width:320px;margin-top:10px;border-radius:8px;" alt="" />` : ""}
         <div style="margin-top:10px;">
           <a href="${baseUrl}/missions/${mission.id}#post-${p.id}" style="background:#1E1650;color:#fff;text-decoration:none;padding:8px 14px;border-radius:6px;font-size:13px;">Review &amp; approve</a>
         </div>
       </td>
     </tr>`).join("");
+
   try {
-    await resend.emails.send({
-      from: "ToolsYourWay <onboarding@resend.dev>",
+    const result = await resend.emails.send({
+      from: fromAddr,
       to: [to],
+      reply_to: "hello@toolsyourway.com",
       subject: `[Nexus] ${posts.length} new posts ready for your review — ${mission.name}`,
       html: `<div style="font-family:-apple-system,Segoe UI,sans-serif;max-width:640px;margin:auto;padding:24px;">
         <h2 style="color:#1E1650;margin-bottom:8px;">Nexus drafted ${posts.length} posts for ${mission.name}</h2>
@@ -278,9 +293,18 @@ async function sendReviewEmail(to: string, mission: GrowthMission, posts: Schedu
         <p style="margin-top:24px;color:#777;font-size:12px;">Posts only go live AFTER you approve them. Review them all in one place: <a href="${baseUrl}/missions/${mission.id}">Open mission →</a></p>
       </div>`,
     });
-    return { sent: true };
+    // Resend SDK returns { data: { id }, error: null } on success and
+    // { data: null, error: {...} } on failure — must check both shapes.
+    const r = result as any;
+    if (r?.error) {
+      console.error("[Missions] Resend rejected email", JSON.stringify(r.error).slice(0, 400));
+      return { sent: false, reason: r.error?.message || r.error?.name || "Resend rejected the email" };
+    }
+    const id = r?.data?.id || r?.id;
+    console.log(`[Missions] review email accepted by Resend (id=${id}) -> ${to} via ${fromAddr}`);
+    return { sent: true, id, from: fromAddr };
   } catch (e: any) {
-    console.error("[Missions] email send failed", e?.message || e);
+    console.error("[Missions] email send threw", e?.message || e);
     return { sent: false, reason: e?.message || "Email send failed" };
   }
 }
