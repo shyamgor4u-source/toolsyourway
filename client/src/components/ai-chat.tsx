@@ -167,8 +167,13 @@ export default function AiChat() {
     },
     onSuccess: (data) => {
       toast({
-        title: "Mission launched",
-        description: `Nexus drafted ${data.posts?.length || 0} kickoff posts. ${data.email?.sent ? "Review email sent." : ""}`,
+        title: `Mission launched — ${data.posts?.length || 0} drafts ready`,
+        description: data.email?.sent
+          ? "Review email sent. Check inbox AND spam folder so future drafts land in your inbox."
+          : data.email?.reason
+            ? `Email not sent: ${data.email.reason}. Drafts are ready in-app.`
+            : "Drafts are ready in-app.",
+        duration: 9000,
       });
       if (data.mission?.id) {
         setOpen(false);

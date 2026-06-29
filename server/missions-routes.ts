@@ -268,6 +268,14 @@ async function sendReviewEmail(to: string, mission: GrowthMission, posts: Schedu
   // to the verified domain fixes silent non-delivery.
   const fromAddr = process.env.MAIL_FROM || "ToolsYourWay <hello@toolsyourway.com>";
 
+  // IMPORTANT: the frontend uses HASH ROUTING (wouter useHashLocation), so the
+  // path lives AFTER the # in the URL. A link like /missions/1#post-1 hits the
+  // root route (blank page). The correct link is /#/missions/1.
+  // We intentionally do NOT include a #post-N anchor because that would clobber
+  // the route hash. Scrolling to the post within the page is good-to-have but
+  // can be wired up via query param later.
+  const missionUrl = `${baseUrl}/#/missions/${mission.id}`;
+
   const rows = posts.map((p) => `
     <tr>
       <td style="padding:14px 0; border-bottom:1px solid #eee;">
@@ -275,7 +283,7 @@ async function sendReviewEmail(to: string, mission: GrowthMission, posts: Schedu
         <div style="font-size:14px;line-height:1.5;color:#222;white-space:pre-wrap;">${(p.content || "").slice(0, 600)}${(p.content || "").length > 600 ? "…" : ""}</div>
         ${p.imageUrl ? `<img src="${p.imageUrl}" style="max-width:320px;margin-top:10px;border-radius:8px;" alt="" />` : ""}
         <div style="margin-top:10px;">
-          <a href="${baseUrl}/missions/${mission.id}#post-${p.id}" style="background:#1E1650;color:#fff;text-decoration:none;padding:8px 14px;border-radius:6px;font-size:13px;">Review &amp; approve</a>
+          <a href="${missionUrl}" style="background:#1E1650;color:#fff;text-decoration:none;padding:8px 14px;border-radius:6px;font-size:13px;">Review &amp; approve</a>
         </div>
       </td>
     </tr>`).join("");
@@ -290,7 +298,12 @@ async function sendReviewEmail(to: string, mission: GrowthMission, posts: Schedu
         <h2 style="color:#1E1650;margin-bottom:8px;">Nexus drafted ${posts.length} posts for ${mission.name}</h2>
         <p style="color:#555;font-size:14px;">Goal: ${mission.goal}</p>
         <table width="100%" cellpadding="0" cellspacing="0">${rows}</table>
-        <p style="margin-top:24px;color:#777;font-size:12px;">Posts only go live AFTER you approve them. Review them all in one place: <a href="${baseUrl}/missions/${mission.id}">Open mission →</a></p>
+        <p style="margin-top:24px;color:#777;font-size:12px;">Posts only go live AFTER you approve them. Review them all in one place: <a href="${missionUrl}">Open mission →</a></p>
+        <hr style="border:none;border-top:1px solid #eee;margin:24px 0 12px;" />
+        <p style="color:#999;font-size:11px;line-height:1.5;">
+          Sent by <a href="${baseUrl}" style="color:#1E1650;">ToolsYourWay</a> on behalf of your Nexus AI Chief of Staff. 
+          Not seeing our emails? Check your spam/junk folder and mark this as “Not spam” so future drafts land in your inbox.
+        </p>
       </div>`,
     });
     // Resend SDK returns { data: { id }, error: null } on success and

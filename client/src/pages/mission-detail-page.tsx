@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import {
-  ArrowLeft, Loader2, CheckCircle2, XCircle, Mail, RefreshCcw, PauseCircle, PlayCircle, Sparkles, Calendar, ImageIcon, Target,
+  ArrowLeft, Loader2, CheckCircle2, XCircle, Mail, PauseCircle, PlayCircle, Sparkles, Calendar, ImageIcon, Target, AlertCircle,
 } from "lucide-react";
 
 interface Post {
@@ -57,7 +57,16 @@ export default function MissionDetailPage() {
   const generateBatch = useMutation({
     mutationFn: async () => (await apiRequest("POST", `/api/missions/${id}/generate-batch`, { count: 7 })).json(),
     onSuccess: (data) => {
-      toast({ title: "Drafts ready", description: `${data.posts?.length || 0} new posts. ${data.email?.sent ? "Review email sent." : ""}` });
+      const emailLine = data.email?.sent
+        ? "Review email sent — check inbox AND spam folder."
+        : data.email?.reason
+          ? `Email not sent: ${data.email.reason}`
+          : "";
+      toast({
+        title: `${data.posts?.length || 0} new drafts ready`,
+        description: emailLine,
+        duration: 8000,
+      });
       invalidate();
     },
     onError: (e: any) => toast({ title: "Generate failed", description: e.message, variant: "destructive" }),
@@ -77,7 +86,15 @@ export default function MissionDetailPage() {
   });
   const sendReview = useMutation({
     mutationFn: async () => (await apiRequest("POST", `/api/missions/${id}/send-review`)).json(),
-    onSuccess: (data) => toast({ title: data.sent ? "Review email sent" : "Email not sent", description: data.reason || `${data.count} drafts` }),
+    onSuccess: (data) =>
+      toast({
+        title: data.sent ? `Review email sent (${data.count || 0} drafts)` : "Email not sent",
+        description: data.sent
+          ? "Check inbox AND spam folder. Mark as 'Not spam' so future emails land in inbox."
+          : data.reason || "Try again in a moment.",
+        variant: data.sent ? "default" : "destructive",
+        duration: 8000,
+      }),
   });
   const setStatus = useMutation({
     mutationFn: async (status: string) => (await apiRequest("POST", `/api/missions/${id}/status`, { status })).json(),
@@ -122,6 +139,19 @@ export default function MissionDetailPage() {
       </header>
 
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+        {/* Spam-folder reminder banner */}
+        {mission.reviewChannel === "email" && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 flex items-start gap-3">
+            <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div className="text-xs text-amber-900">
+              <strong>First-time emails often land in Spam.</strong> Search your inbox for {"\""}
+              <span className="font-mono">hello@toolsyourway.com</span>{"\""} — if you find it in Spam/Junk,
+              mark it as <strong>“Not spam”</strong> and add the sender to your contacts so future Nexus
+              drafts land in your inbox. You can always review &amp; approve every post here in-app.
+            </div>
+          </div>
+        )}
+
         {/* Mission overview */}
         <Card>
           <CardContent className="py-5 px-5 grid grid-cols-1 md:grid-cols-4 gap-4 text-xs">

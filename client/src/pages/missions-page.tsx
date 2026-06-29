@@ -53,9 +53,15 @@ export default function MissionsPage() {
       return res.json();
     },
     onSuccess: (data) => {
+      const emailLine = data.email?.sent
+        ? "Review email sent — check your inbox AND spam folder (mark as 'Not spam' so future drafts land in inbox)."
+        : data.email?.reason
+          ? `Review email not sent: ${data.email.reason}`
+          : "Drafts are ready in-app.";
       toast({
-        title: "Mission launched",
-        description: `Nexus drafted ${data.posts?.length || 0} posts. ${data.email?.sent ? "Review email sent." : ""}`,
+        title: `Mission launched — ${data.posts?.length || 0} drafts ready`,
+        description: emailLine,
+        duration: 9000,
       });
       queryClient.invalidateQueries({ queryKey: ["/api/missions"] });
       if (data.mission?.id) nav(`/missions/${data.mission.id}`);
