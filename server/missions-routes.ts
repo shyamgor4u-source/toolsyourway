@@ -284,7 +284,7 @@ async function sendReviewEmail(to: string, mission: GrowthMission, posts: Schedu
     const result = await resend.emails.send({
       from: fromAddr,
       to: [to],
-      reply_to: "hello@toolsyourway.com",
+      replyTo: "hello@toolsyourway.com",
       subject: `[Nexus] ${posts.length} new posts ready for your review — ${mission.name}`,
       html: `<div style="font-family:-apple-system,Segoe UI,sans-serif;max-width:640px;margin:auto;padding:24px;">
         <h2 style="color:#1E1650;margin-bottom:8px;">Nexus drafted ${posts.length} posts for ${mission.name}</h2>
