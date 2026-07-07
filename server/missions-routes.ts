@@ -20,9 +20,14 @@
 import type { Express, Request, Response } from "express";
 import { eq, and, desc, sql } from "drizzle-orm";
 import { Resend } from "resend";
-import { db } from "./storage";
+import { db, storage } from "./storage";
 import { growthMissions, scheduledPosts, socialConnections } from "../shared/schema";
 import type { GrowthMission, SocialConnection, ScheduledPost } from "../shared/schema";
+import {
+  buildPlatformDestinations,
+  resolveDestinations,
+  type PersistedDestination,
+} from "./social-destinations";
 
 // ----- AI provider helpers (mirror /api/chat fallback chain) -----
 
@@ -323,6 +328,100 @@ async function sendReviewEmail(to: string, mission: GrowthMission, posts: Schedu
 }
 
 // ============================================================
+// PUBLISH READINESS — LinkedIn / destination guardrail
+// ============================================================
+// A mission post can only publish if its platform is CONNECTED and at least one
+// valid destination (profile or page) can be resolved. Mission posts historically
+// did NOT persist a `destinations` snapshot, so the worker would silently fail
+// with "No destinations on this post" even when the user had approved it. We now
+// resolve + persist destinations at approval time and block approval when the
+// platform is not connected — so the user fixes it before the worker ever runs.
+
+const PLATFORM_LABELS: Record<string, string> = {
+  linkedin: "LinkedIn",
+  facebook: "Facebook",
+  instagram: "Instagram",
+  youtube: "YouTube",
+  twitter: "X / Twitter",
+  tiktok: "TikTok",
+};
+const platformLabel = (p: string) => PLATFORM_LABELS[p] || p;
+
+// Resolve the Marketing Bot default destination ids the user saved for a platform.
+async function getMarketingDefaultIds(userId: number, platform: string): Promise<string[]> {
+  try {
+    const configs = await storage.getBotConfigs(userId);
+    const marketing = configs.find((c: any) => c.botType === "marketing");
+    if (!marketing?.config) return [];
+    const parsed = JSON.parse(marketing.config);
+    const d = parsed?.destinations;
+    const ids = d && typeof d === "object" ? d[platform] : undefined;
+    return Array.isArray(ids) ? ids.filter((x: any) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export interface PublishReadiness {
+  platform: string;
+  connected: boolean;
+  availableDestinationCount: number;
+  destinations: PersistedDestination[]; // destinations we would publish to
+  canPublish: boolean;
+  code: "ready" | "not_connected" | "no_destination";
+  reason: string | null;
+}
+
+// Resolve the destinations a mission post would publish to. Prefers the user's
+// saved Marketing Bot defaults for the platform; falls back to the profile
+// destination (or first available) so a freshly-connected user with no explicit
+// selection still publishes to a sensible target.
+async function resolvePublishReadiness(userId: number, platform: string): Promise<PublishReadiness> {
+  const connections = await storage.getSocialConnections(userId);
+  const conn = connections.find((c) => c.platform === platform);
+  const connected = !!conn && conn.status === "connected";
+  const available = buildPlatformDestinations(platform, conn as any, []).destinations;
+
+  if (!connected) {
+    return {
+      platform, connected: false, availableDestinationCount: available.length,
+      destinations: [], canPublish: false, code: "not_connected",
+      reason: `${platformLabel(platform)} is not connected for this mission.`,
+    };
+  }
+
+  let ids = (await getMarketingDefaultIds(userId, platform)).filter((id) =>
+    available.some((d) => d.destinationId === id),
+  );
+  if (ids.length === 0) {
+    const profile = available.find(
+      (d) => d.destinationType === "profile" || d.destinationType === "business_account",
+    );
+    const fallback = profile || available[0];
+    if (fallback) ids = [fallback.destinationId];
+  }
+
+  const { resolved } = resolveDestinations(platform, conn as any, ids);
+  if (resolved.length === 0) {
+    return {
+      platform, connected: true, availableDestinationCount: available.length,
+      destinations: [], canPublish: false, code: "no_destination",
+      reason: `No ${platformLabel(platform)} profile or page is available to publish to. Choose a profile/page in the Marketing Bot.`,
+    };
+  }
+
+  return {
+    platform, connected: true, availableDestinationCount: available.length,
+    destinations: resolved, canPublish: true, code: "ready", reason: null,
+  };
+}
+
+// The platform a post publishes through (falls back through the mission).
+function postPlatform(post: { destinationPlatform?: string | null; platform?: string | null }, mission?: { platform?: string | null }): string {
+  return post.destinationPlatform || post.platform || mission?.platform || "linkedin";
+}
+
+// ============================================================
 // Routes
 // ============================================================
 export function registerMissionsRoutes(
@@ -370,7 +469,23 @@ export function registerMissionsRoutes(
     const posts = await db.select().from(scheduledPosts)
       .where(and(eq(scheduledPosts.userId, user.id), eq(scheduledPosts.missionId, id)))
       .orderBy(scheduledPosts.scheduledFor);
-    res.json({ mission: m, posts });
+    // Connection/destination readiness so the UI can warn (and gate approval)
+    // before the publish worker silently fails on an unconnected platform.
+    const readiness = await resolvePublishReadiness(user.id, m.platform || "linkedin");
+    res.json({
+      mission: m,
+      posts,
+      readiness: {
+        platform: readiness.platform,
+        platformLabel: platformLabel(readiness.platform),
+        connected: readiness.connected,
+        canPublish: readiness.canPublish,
+        code: readiness.code,
+        reason: readiness.reason,
+        availableDestinationCount: readiness.availableDestinationCount,
+        destinationNames: readiness.destinations.map((d) => d.displayName),
+      },
+    });
   });
 
   // ---- Create a mission ----
@@ -562,14 +677,35 @@ Produce the JSON plan now.`;
   });
 
   // ---- Approve a single post: flips status to "approved" so the worker publishes it ----
+  // Guardrail: refuse to approve a post whose platform is not connected or has no
+  // resolvable destination — otherwise the worker would silently fail later. On
+  // success we snapshot the resolved destinations onto the post so the worker has
+  // an explicit target (mission posts historically stored none).
   app.post("/api/missions/:id/posts/:postId/approve", requireAuth, async (req: Request, res: Response) => {
     const user = req.user!;
     const postId = Number(req.params.postId);
     const post = (await db.select().from(scheduledPosts).where(and(eq(scheduledPosts.id, postId), eq(scheduledPosts.userId, user.id))))[0];
     if (!post) return res.status(404).json({ message: "Post not found" });
+
+    const platform = postPlatform(post);
+    // Respect an existing destination snapshot (e.g. a future explicit selector),
+    // but still verify the platform is connected before approving.
+    const hasSnapshot = (() => { try { return Array.isArray(JSON.parse(post.destinations || "[]")) && JSON.parse(post.destinations!).length > 0; } catch { return false; } })();
+    const readiness = await resolvePublishReadiness(user.id, platform);
+    if (!readiness.canPublish && !hasSnapshot) {
+      return res.status(409).json({
+        message: readiness.reason || `${platformLabel(platform)} is not ready to publish.`,
+        code: readiness.code,
+        platform,
+        platformLabel: platformLabel(platform),
+      });
+    }
+
     const updated = await db.update(scheduledPosts).set({
       status: "approved",
       approvedAt: new Date().toISOString(),
+      ...(hasSnapshot ? {} : { destinations: JSON.stringify(readiness.destinations) }),
+      lastError: null,
     } as any).where(eq(scheduledPosts.id, postId)).returning();
     res.json(updated[0]);
   });
@@ -585,14 +721,35 @@ Produce the JSON plan now.`;
   });
 
   // ---- Approve ALL pending drafts in one go ----
+  // Same guardrail as single approve: block the whole batch if the mission's
+  // platform is not connected / has no destination, so the user connects LinkedIn
+  // first instead of approving posts that can never publish.
   app.post("/api/missions/:id/approve-all", requireAuth, async (req: Request, res: Response) => {
     const user = req.user!;
     const id = Number(req.params.id);
-    await db.update(scheduledPosts).set({
+    const mission = (await db.select().from(growthMissions).where(and(eq(growthMissions.id, id), eq(growthMissions.userId, user.id))))[0];
+    if (!mission) return res.status(404).json({ message: "Mission not found" });
+
+    const platform = mission.platform || "linkedin";
+    const readiness = await resolvePublishReadiness(user.id, platform);
+    if (!readiness.canPublish) {
+      return res.status(409).json({
+        message: readiness.reason || `${platformLabel(platform)} is not ready to publish.`,
+        code: readiness.code,
+        platform,
+        platformLabel: platformLabel(platform),
+      });
+    }
+
+    const nowIso = new Date().toISOString();
+    const snapshot = JSON.stringify(readiness.destinations);
+    const result = await db.update(scheduledPosts).set({
       status: "approved",
-      approvedAt: new Date().toISOString(),
-    } as any).where(sql`${scheduledPosts.userId} = ${user.id} AND ${scheduledPosts.missionId} = ${id} AND ${scheduledPosts.status} = 'draft'`);
-    res.json({ ok: true });
+      approvedAt: nowIso,
+      destinations: snapshot,
+      lastError: null,
+    } as any).where(sql`${scheduledPosts.userId} = ${user.id} AND ${scheduledPosts.missionId} = ${id} AND ${scheduledPosts.status} = 'draft'`).returning();
+    res.json({ ok: true, approved: result.length });
   });
 
   // ---- Pause / resume / archive ----

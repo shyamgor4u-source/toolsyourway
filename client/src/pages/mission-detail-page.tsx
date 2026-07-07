@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import {
-  ArrowLeft, Loader2, CheckCircle2, XCircle, Mail, PauseCircle, PlayCircle, Sparkles, Calendar, ImageIcon, Target, AlertCircle,
+  ArrowLeft, Loader2, CheckCircle2, XCircle, Mail, PauseCircle, PlayCircle, Sparkles, Calendar, ImageIcon, Target, AlertCircle, LinkIcon, PlugZap,
 } from "lucide-react";
 
 interface Post {
@@ -22,6 +22,20 @@ interface Post {
   scheduledFor: string | null;
   publishedAt: string | null;
   platform: string;
+  lastError?: string | null;
+  publishAttempts?: number | null;
+  destinationPlatform?: string | null;
+}
+
+interface Readiness {
+  platform: string;
+  platformLabel: string;
+  connected: boolean;
+  canPublish: boolean;
+  code: "ready" | "not_connected" | "no_destination";
+  reason: string | null;
+  availableDestinationCount: number;
+  destinationNames: string[];
 }
 
 interface Mission {
@@ -46,7 +60,7 @@ export default function MissionDetailPage() {
   const { toast } = useToast();
   const id = Number(params?.id);
 
-  const detail = useQuery<{ mission: Mission; posts: Post[] }>({
+  const detail = useQuery<{ mission: Mission; posts: Post[]; readiness?: Readiness }>({
     queryKey: [`/api/missions/${id}`],
     queryFn: async () => (await apiRequest("GET", `/api/missions/${id}`)).json(),
     enabled: !!id,
@@ -72,9 +86,27 @@ export default function MissionDetailPage() {
     onError: (e: any) => toast({ title: "Generate failed", description: e.message, variant: "destructive" }),
   });
 
+  // Surface the backend guardrail (409 not_connected / no_destination) as an
+  // actionable toast instead of a generic failure.
+  const onApproveError = (e: any) => {
+    // apiRequest throws `${status}: ${rawJsonBody}` — pull out the clean message.
+    const raw = String(e?.message || "");
+    let msg = raw;
+    const jsonStart = raw.indexOf("{");
+    if (jsonStart >= 0) {
+      try { msg = JSON.parse(raw.slice(jsonStart))?.message || raw; } catch { /* keep raw */ }
+    }
+    toast({
+      title: `Connect ${platformName} to approve`,
+      description: `${msg} Connect ${platformName} and choose a profile/page in the Marketing Bot, then approve.`,
+      variant: "destructive",
+      duration: 9000,
+    });
+  };
   const approve = useMutation({
     mutationFn: async (postId: number) => (await apiRequest("POST", `/api/missions/${id}/posts/${postId}/approve`)).json(),
-    onSuccess: () => { toast({ title: "Approved" }); invalidate(); },
+    onSuccess: () => { toast({ title: "Approved & scheduled" }); invalidate(); },
+    onError: onApproveError,
   });
   const reject = useMutation({
     mutationFn: async (postId: number) => (await apiRequest("POST", `/api/missions/${id}/posts/${postId}/reject`)).json(),
@@ -82,7 +114,8 @@ export default function MissionDetailPage() {
   });
   const approveAll = useMutation({
     mutationFn: async () => (await apiRequest("POST", `/api/missions/${id}/approve-all`)).json(),
-    onSuccess: () => { toast({ title: "All drafts approved" }); invalidate(); },
+    onSuccess: (data) => { toast({ title: `Approved ${data?.approved ?? "all"} drafts` }); invalidate(); },
+    onError: onApproveError,
   });
   const sendReview = useMutation({
     mutationFn: async () => (await apiRequest("POST", `/api/missions/${id}/send-review`)).json(),
@@ -107,7 +140,9 @@ export default function MissionDetailPage() {
   if (!detail.data) {
     return <div className="text-center py-20 text-muted-foreground">Mission not found.</div>;
   }
-  const { mission, posts } = detail.data;
+  const { mission, posts, readiness } = detail.data;
+  const canApprove = readiness?.canPublish ?? true;
+  const platformName = readiness?.platformLabel || "LinkedIn";
   const pillars: string[] = (() => { try { return JSON.parse(mission.pillars || "[]"); } catch { return []; } })();
   const drafts = posts.filter((p) => p.status === "draft");
   const approved = posts.filter((p) => ["approved", "publishing"].includes(p.status));
@@ -139,6 +174,43 @@ export default function MissionDetailPage() {
       </header>
 
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+        {/* Publish-readiness guardrail: LinkedIn (or mission platform) not connected
+            or no destination selected. Approved posts can never publish until this
+            is fixed, so we warn prominently and gate the Approve actions. */}
+        {readiness && !canApprove && (
+          <div className="rounded-lg border border-red-300 bg-red-50 px-4 py-3.5 flex items-start gap-3" data-testid="banner-linkedin-guardrail">
+            <PlugZap className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1 text-sm text-red-900">
+              <strong className="block mb-0.5">
+                {readiness.code === "not_connected"
+                  ? `${platformName} is not connected for this mission.`
+                  : `No ${platformName} profile or page is selected.`}
+              </strong>
+              <span className="text-red-800/90">
+                Connect {platformName} and choose a profile/page before approving these posts — otherwise
+                approved posts stay queued and never publish.
+              </span>
+            </div>
+            <Button
+              size="sm"
+              className="bg-[#1E1650] hover:bg-[#1E1650]/90 text-white flex-shrink-0"
+              onClick={() => nav("/bot/marketing")}
+              data-testid="button-connect-linkedin"
+            >
+              <LinkIcon className="w-3.5 h-3.5 mr-1.5" /> Connect {platformName}
+            </Button>
+          </div>
+        )}
+        {readiness && canApprove && readiness.destinationNames.length > 0 && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 flex items-center gap-2.5 text-xs text-emerald-900" data-testid="banner-linkedin-ready">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+            <span>
+              {platformName} connected — approved posts publish to{" "}
+              <strong>{readiness.destinationNames.join(", ")}</strong>.
+            </span>
+          </div>
+        )}
+
         {/* Spam-folder reminder banner */}
         {mission.reviewChannel === "email" && (
           <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 flex items-start gap-3">
@@ -209,7 +281,14 @@ export default function MissionDetailPage() {
           </Button>
           {drafts.length > 0 && (
             <>
-              <Button size="sm" variant="outline" onClick={() => approveAll.mutate()} data-testid="button-approve-all">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => approveAll.mutate()}
+                disabled={!canApprove || approveAll.isPending}
+                title={canApprove ? undefined : `Connect ${platformName} before approving`}
+                data-testid="button-approve-all"
+              >
                 <CheckCircle2 className="w-4 h-4 mr-1" /> Approve all {drafts.length}
               </Button>
               <Button size="sm" variant="outline" onClick={() => sendReview.mutate()}>
@@ -226,7 +305,7 @@ export default function MissionDetailPage() {
               No posts yet. Click "Generate next 7 posts" to start.
             </CardContent></Card>
           ) : (
-            posts.map((p) => <PostCard key={p.id} post={p} onApprove={() => approve.mutate(p.id)} onReject={() => reject.mutate(p.id)} />)
+            posts.map((p) => <PostCard key={p.id} post={p} canApprove={canApprove} platformName={platformName} onConnect={() => nav("/bot/marketing")} onApprove={() => approve.mutate(p.id)} onReject={() => reject.mutate(p.id)} />)
           )}
         </div>
       </main>
@@ -234,15 +313,27 @@ export default function MissionDetailPage() {
   );
 }
 
-function PostCard({ post, onApprove, onReject }: { post: Post; onApprove: () => void; onReject: () => void }) {
+function PostCard({ post, canApprove, platformName, onApprove, onReject, onConnect }: {
+  post: Post;
+  canApprove: boolean;
+  platformName: string;
+  onApprove: () => void;
+  onReject: () => void;
+  onConnect: () => void;
+}) {
   const isDraft = post.status === "draft";
-  const isPublished = post.status === "published";
+  const isFailed = post.status === "failed" || post.status === "partial_failed";
   const statusColor =
     post.status === "draft" ? "bg-amber-100 text-amber-800"
       : post.status === "approved" || post.status === "publishing" ? "bg-emerald-100 text-emerald-800"
       : post.status === "published" ? "bg-blue-100 text-blue-800"
       : post.status === "cancelled" ? "bg-gray-100 text-gray-700"
       : "bg-red-100 text-red-800";
+
+  // Make worker errors actionable — a missing/expired LinkedIn connection is the
+  // most common cause of a queued post that never publishes.
+  const err = post.lastError || "";
+  const looksLikeConnection = /not connected|no longer connected|token|reconnect|no destinations/i.test(err);
 
   return (
     <Card id={`post-${post.id}`} data-testid={`card-post-${post.id}`}>
@@ -265,10 +356,42 @@ function PostCard({ post, onApprove, onReject }: { post: Post; onApprove: () => 
               </span>
             </div>
             <p className="text-xs whitespace-pre-wrap leading-relaxed text-foreground line-clamp-6">{post.content}</p>
+
+            {/* Surface worker/publish errors (e.g. linkedin_not_connected, expired
+                token, missing destination) with an actionable fix. */}
+            {isFailed && err && (
+              <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-800" data-testid={`post-error-${post.id}`}>
+                <div className="flex items-center gap-1.5 font-medium">
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  {post.status === "partial_failed" ? "Published to some destinations, failed on others" : "This post failed to publish"}
+                </div>
+                <div className="mt-1 text-red-700/90">{err}</div>
+                {looksLikeConnection && (
+                  <button
+                    className="mt-1.5 inline-flex items-center gap-1 font-medium text-[#1E1650] underline underline-offset-2"
+                    onClick={onConnect}
+                    data-testid={`button-fix-connection-${post.id}`}
+                  >
+                    <LinkIcon className="w-3 h-3" /> Reconnect {platformName} in Marketing Bot
+                  </button>
+                )}
+              </div>
+            )}
+
             {isDraft && (
               <div className="flex items-center gap-2 mt-3">
-                <Button size="sm" variant="default" onClick={onApprove} data-testid={`button-approve-${post.id}`}>
-                  <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Approve & schedule
+                <Button
+                  size="sm"
+                  variant="default"
+                  onClick={canApprove ? onApprove : onConnect}
+                  title={canApprove ? undefined : `Connect ${platformName} before approving`}
+                  data-testid={`button-approve-${post.id}`}
+                >
+                  {canApprove ? (
+                    <><CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Approve & schedule</>
+                  ) : (
+                    <><LinkIcon className="w-3.5 h-3.5 mr-1" /> Connect {platformName} to approve</>
+                  )}
                 </Button>
                 <Button size="sm" variant="outline" onClick={onReject} data-testid={`button-reject-${post.id}`}>
                   <XCircle className="w-3.5 h-3.5 mr-1" /> Reject
