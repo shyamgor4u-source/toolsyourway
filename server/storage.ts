@@ -16,7 +16,33 @@ import {
 } from "@shared/schema";
 import bcrypt from "bcryptjs";
 
-const client = createClient({ url: "file:toolsyourway.db" });
+// Durable database selection.
+// Prefer a remote libSQL/Turso database when configured via env so that data
+// (LinkedIn connections, users, scheduled posts, Nexus chat) survives Render
+// deploys/restarts. The Render free plan has no persistent disk, so a local
+// SQLite file is wiped on every restart — that was the dominant reason
+// "LinkedIn won't stay connected". Fall back to the local file only for dev.
+const DB_URL =
+  process.env.DATABASE_URL ||
+  process.env.TURSO_DATABASE_URL ||
+  process.env.LIBSQL_URL ||
+  "file:toolsyourway.db";
+const DB_AUTH_TOKEN =
+  process.env.DATABASE_AUTH_TOKEN ||
+  process.env.TURSO_AUTH_TOKEN ||
+  process.env.LIBSQL_AUTH_TOKEN;
+
+const isRemote = /^libsql:|^https:|^wss:/.test(DB_URL);
+if (!isRemote && DB_URL === "file:toolsyourway.db") {
+  console.warn(
+    "[storage] Using ephemeral local SQLite (file:toolsyourway.db). " +
+      "Set DATABASE_URL + DATABASE_AUTH_TOKEN to a remote libSQL/Turso DB for durable storage in production.",
+  );
+}
+
+const client = createClient(
+  isRemote && DB_AUTH_TOKEN ? { url: DB_URL, authToken: DB_AUTH_TOKEN } : { url: DB_URL },
+);
 export const db = drizzle(client);
 
 // Auto-create tables on startup

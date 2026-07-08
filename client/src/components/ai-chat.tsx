@@ -73,6 +73,23 @@ function extractActions(text: string): { displayText: string; missionGoal?: stri
   return { displayText: display, missionGoal, connectPlatforms: connectPlatforms.length ? connectPlatforms : undefined };
 }
 
+// Format an ISO timestamp for the history panel: "Today 14:32", "Yesterday
+// 09:10", or "12 Mar 14:32". Falls back gracefully on bad input.
+function formatHistoryTime(iso?: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const now = new Date();
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const sameDay = (a: Date, b: Date) =>
+    a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (sameDay(d, now)) return `Today ${time}`;
+  if (sameDay(d, yesterday)) return `Yesterday ${time}`;
+  return `${d.toLocaleDateString([], { day: "numeric", month: "short" })} ${time}`;
+}
+
 const ROLE_PRESETS = [
   { value: "", label: "Chief of Staff (default)" },
   { value: "LinkedIn Content Strategist", label: "LinkedIn Content Strategist" },
@@ -92,6 +109,7 @@ export default function AiChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [role, setRole] = useState<string>("");
   const [showRolePicker, setShowRolePicker] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [activeModel, setActiveModel] = useState<{ label: string; provider: string } | null>(null);
   const [, nav] = useLocation();
   const { toast } = useToast();
@@ -249,6 +267,7 @@ export default function AiChat() {
   const handleSend = () => {
     const msg = input.trim();
     if (!msg || sendMessage.isPending) return;
+    setShowHistory(false);
     setMessages((prev) => [...prev, { role: "user", content: msg }]);
     setInput("");
     sendMessage.mutate(msg);
@@ -366,6 +385,20 @@ export default function AiChat() {
             <div className="flex items-center gap-1">
               <button
                 onClick={() => {
+                  setShowHistory((v) => {
+                    const next = !v;
+                    if (next) historyQuery.refetch();
+                    return next;
+                  });
+                }}
+                className={`p-1.5 rounded-lg hover:bg-white/10 transition-colors ${showHistory ? "bg-white/15 text-white" : "text-white/70 hover:text-white"}`}
+                data-testid="chat-history"
+                title="Conversation history"
+              >
+                <History className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => {
                   if (confirm("Start a fresh conversation? Your history will be cleared.")) clearHistory.mutate();
                 }}
                 className="p-1.5 rounded-lg hover:bg-white/10 text-white/70 hover:text-white transition-colors"
@@ -412,7 +445,73 @@ export default function AiChat() {
             </div>
           )}
 
+          {/* History panel — backend-persisted conversation, source of truth */}
+          {showHistory && (
+            <div className="flex-1 overflow-y-auto bg-background flex flex-col" data-testid="history-panel">
+              <div className="flex items-center justify-between px-4 py-2.5 border-b border-border flex-shrink-0">
+                <div className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                  <History className="h-3.5 w-3.5" /> Conversation history
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => historyQuery.refetch()}
+                    className="text-[11px] px-2 py-1 rounded-md border border-border text-muted-foreground hover:bg-muted transition-colors"
+                    data-testid="history-refresh"
+                    title="Refresh from server"
+                  >
+                    {historyQuery.isFetching ? "Refreshing…" : "Refresh"}
+                  </button>
+                  <button
+                    onClick={() => setShowHistory(false)}
+                    className="text-[11px] px-2 py-1 rounded-md border border-border text-muted-foreground hover:bg-muted transition-colors"
+                    data-testid="history-back"
+                  >
+                    Back to chat
+                  </button>
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2">
+                {historyQuery.isLoading ? (
+                  <div className="flex items-center justify-center py-10 text-muted-foreground text-xs gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" /> Loading history…
+                  </div>
+                ) : !historyQuery.data || historyQuery.data.length === 0 ? (
+                  <div className="text-center py-10 px-4">
+                    <History className="h-8 w-8 mx-auto mb-2 text-muted-foreground/40" />
+                    <p className="text-sm font-medium text-foreground mb-1">No history yet</p>
+                    <p className="text-xs text-muted-foreground">
+                      Your conversations with Nexus are saved to your account and will appear here — across devices and logins.
+                    </p>
+                  </div>
+                ) : (
+                  historyQuery.data.map((m: any, i: number) => {
+                    const isUser = m.role === "user";
+                    const preview = extractActions(String(m.content || "")).displayText || "(no text)";
+                    return (
+                      <button
+                        key={m.id ?? i}
+                        onClick={() => setShowHistory(false)}
+                        className="w-full text-left rounded-lg border border-border/60 bg-muted/30 hover:bg-muted transition-colors px-3 py-2"
+                        data-testid={`history-item-${i}`}
+                        title="Back to chat"
+                      >
+                        <div className="flex items-center justify-between mb-0.5">
+                          <span className={`text-[10px] font-semibold uppercase tracking-wide ${isUser ? "text-primary" : "text-amber-600"}`}>
+                            {isUser ? "You" : "Nexus"}
+                          </span>
+                          <span className="text-[10px] text-muted-foreground">{formatHistoryTime(m.createdAt)}</span>
+                        </div>
+                        <p className="text-xs text-foreground/80 line-clamp-2">{preview}</p>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Messages */}
+          {!showHistory && (
           <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 bg-background">
             {messages.length === 0 && (
               <div className="text-center py-8">
@@ -518,6 +617,7 @@ export default function AiChat() {
 
             <div ref={messagesEndRef} />
           </div>
+          )}
 
           {/* Input */}
           <div className="flex items-center gap-2 px-3 py-3 border-t border-border bg-background flex-shrink-0">

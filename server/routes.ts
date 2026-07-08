@@ -1319,6 +1319,80 @@ Now respond to the user's latest message with the depth and specificity of a rea
     }
   });
 
+  // DIAGNOSTICS: end-to-end publish health for the current user. NEVER returns
+  // tokens or secrets. Surfaces exactly the signals needed to explain why a
+  // LinkedIn (or any) scheduled post did/didn't publish:
+  //   - worker enabled + interval
+  //   - each platform connection: present?, connected?, age, expiresAt, expired?
+  //   - approved posts missing a destination snapshot (would fail without repair)
+  //   - failed posts with their lastError
+  //   - counts by status + due-now count
+  app.get("/api/bots/marketing/diagnostics", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      const [posts, connections] = await Promise.all([
+        storage.getScheduledPosts(userId),
+        storage.getSocialConnections(userId),
+      ]);
+      const now = Date.now();
+      const isDue = (p: any) => !p.scheduledFor || new Date(p.scheduledFor).getTime() <= now;
+      const destCount = (p: any) => { try { return (JSON.parse(p.destinations || "[]") || []).length; } catch { return 0; } };
+
+      const statusCounts: Record<string, number> = {};
+      for (const p of posts) statusCounts[p.status] = (statusCounts[p.status] || 0) + 1;
+
+      const approvedMissingDestinations = posts
+        .filter((p: any) => p.status === "approved" && destCount(p) === 0)
+        .map((p: any) => ({ id: p.id, platform: p.platform, scheduledFor: p.scheduledFor }));
+
+      const failedPosts = posts
+        .filter((p: any) => p.status === "failed" || p.status === "partial_failed")
+        .map((p: any) => ({
+          id: p.id,
+          platform: p.platform,
+          status: p.status,
+          scheduledFor: p.scheduledFor,
+          publishAttempts: p.publishAttempts ?? 0,
+          lastAttemptAt: p.lastAttemptAt ?? null,
+          lastError: p.lastError ?? null,
+        }));
+
+      const connectionHealth = connections.map((c: any) => {
+        const connectedAtMs = c.connectedAt ? new Date(c.connectedAt).getTime() : null;
+        const expiresAtMs = c.expiresAt ? new Date(c.expiresAt).getTime() : null;
+        return {
+          platform: c.platform,
+          status: c.status,
+          connected: c.status === "connected",
+          accountName: c.accountName ?? null,
+          displayName: c.displayName ?? null,
+          hasAccessToken: !!c.accessToken,
+          connectedAt: c.connectedAt ?? null,
+          ageDays: connectedAtMs != null ? Math.floor((now - connectedAtMs) / 86_400_000) : null,
+          expiresAt: c.expiresAt ?? null,
+          expired: expiresAtMs != null ? expiresAtMs <= now : false,
+          expiresInDays: expiresAtMs != null ? Math.floor((expiresAtMs - now) / 86_400_000) : null,
+        };
+      });
+
+      res.json({
+        workerEnabled: isPublishWorkerEnabled(),
+        intervalMs: parseInt(process.env.MARKETING_PUBLISH_WORKER_INTERVAL_MS || "60000", 10) || 60000,
+        durableDatabase: /^libsql:|^https:|^wss:/.test(
+          process.env.DATABASE_URL || process.env.TURSO_DATABASE_URL || process.env.LIBSQL_URL || "",
+        ),
+        statusCounts,
+        dueApprovedCount: posts.filter((p: any) => p.status === "approved" && isDue(p)).length,
+        connections: connectionHealth,
+        approvedMissingDestinations,
+        failedPosts,
+      });
+    } catch (err: any) {
+      console.error("Publish diagnostics error:", err);
+      res.status(500).json({ message: err.message || "Failed to compute diagnostics" });
+    }
+  });
+
   // ============================================================
   // FINANCE BOT ROUTES
   // ============================================================

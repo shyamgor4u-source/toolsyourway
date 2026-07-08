@@ -19,6 +19,21 @@ services:
         value: "https://www.toolsyourway.com"
       - key: SESSION_SECRET
         generateValue: true
+      # ⚠️ DURABLE DATABASE (REQUIRED for production reliability).
+      # The Render `free` plan has NO persistent disk, so the default local
+      # SQLite file (file:toolsyourway.db) is WIPED on every deploy/restart —
+      # that is why LinkedIn connections, users, scheduled posts and Nexus chat
+      # history kept disappearing. Point these at a remote libSQL/Turso database
+      # so data survives restarts. Create a free DB at https://turso.tech, then
+      # set both values in the Render dashboard (do NOT commit the token):
+      #   DATABASE_URL       e.g. libsql://<db>-<org>.turso.io
+      #   DATABASE_AUTH_TOKEN the Turso auth token for that database
+      # After setting them, run `npm run db:push` once against the remote DB
+      # (or let initDb create the tables on first boot).
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_AUTH_TOKEN
+        sync: false
       - key: ANTHROPIC_API_KEY
         sync: false  # Set manually in Render dashboard
       - key: RESEND_API_KEY

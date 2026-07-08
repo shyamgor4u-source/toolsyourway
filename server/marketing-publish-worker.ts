@@ -24,8 +24,35 @@
 
 import { storage } from "./storage";
 import type { ScheduledPost, SocialConnection } from "@shared/schema";
-import type { PersistedDestination } from "./social-destinations";
+import {
+  buildPlatformDestinations,
+  resolveDestinations,
+  type PersistedDestination,
+} from "./social-destinations";
 import { publishToDestination, type PublishOutcome } from "./publish-service";
+
+// Auto-repair: resolve a sensible destination snapshot for a post that has none.
+// Mirrors the mission approval fallback (profile / business_account / first
+// available) so legacy approved posts created before destination stamping can
+// still publish instead of dying with "No destinations on this post". Returns
+// [] when the platform isn't connected or has no publishable target.
+function resolveFallbackDestinations(
+  connections: SocialConnection[],
+  platform: string,
+): PersistedDestination[] {
+  const conn = connections.find(
+    (c) => c.platform === platform && c.status === "connected",
+  );
+  if (!conn) return [];
+  const available = buildPlatformDestinations(platform, conn, []).destinations;
+  const profile = available.find(
+    (d) => d.destinationType === "profile" || d.destinationType === "business_account",
+  );
+  const fallback = profile || available[0];
+  if (!fallback) return [];
+  const { resolved } = resolveDestinations(platform, conn, [fallback.destinationId]);
+  return resolved;
+}
 
 const ENABLED = process.env.ENABLE_MARKETING_PUBLISH_WORKER === "true";
 const INTERVAL_MS = Math.max(
@@ -71,7 +98,19 @@ function resolveConnection(
   if (dest.accountId) {
     const exact = samePlatform.find((c) => c.accountId === dest.accountId);
     if (exact) return exact;
-    // accountId recorded but no live connection matches it -> ownership changed.
+    // accountId recorded but no live connection matches it. If the user has a
+    // single connected account on this platform, the mismatch is almost always
+    // an accountId format drift or a reconnect (e.g. LinkedIn re-auth) rather
+    // than a genuinely different owner — fall back to it so we don't spuriously
+    // fail with "no longer connected". Only bail when the account is genuinely
+    // ambiguous (multiple connected accounts, none matching).
+    if (samePlatform.length === 1) {
+      console.warn(
+        `[publish-worker] ${dest.platform}: recorded accountId "${dest.accountId}" not found; ` +
+          `falling back to the sole connected account "${samePlatform[0].accountId}".`,
+      );
+      return samePlatform[0];
+    }
     return undefined;
   }
   // No accountId captured (legacy) — fall back to the platform connection.
@@ -84,18 +123,35 @@ export async function publishClaimedPost(post: ScheduledPost): Promise<{
   results: DestinationResult[];
   error?: string;
 }> {
-  const destinations = parseDestinations(post);
+  let destinations = parseDestinations(post);
   const nowIso = () => new Date().toISOString();
 
+  const connections = await storage.getSocialConnections(post.userId);
+
+  // Auto-repair legacy posts with no destination snapshot (created before
+  // destinations were stamped at approval). Resolve a fallback from the live
+  // connection and persist it so future ticks and audits see a concrete target.
   if (destinations.length === 0) {
-    return {
-      status: "failed",
-      results: [],
-      error: "No destinations on this post — nothing to publish.",
-    };
+    const platform = post.destinationPlatform || post.platform || "linkedin";
+    const repaired = resolveFallbackDestinations(connections, platform);
+    if (repaired.length === 0) {
+      return {
+        status: "failed",
+        results: [],
+        error: `No destinations on this post and ${platform} has no publishable profile/page — connect ${platform} and re-approve.`,
+      };
+    }
+    destinations = repaired;
+    try {
+      await storage.updateScheduledPost(post.id, {
+        destinations: JSON.stringify(repaired),
+      } as any);
+      console.log(`[publish-worker] post ${post.id}: auto-repaired ${repaired.length} destination(s) for ${platform}.`);
+    } catch {
+      // Non-fatal: still publish this tick even if the snapshot write fails.
+    }
   }
 
-  const connections = await storage.getSocialConnections(post.userId);
   const results: DestinationResult[] = [];
 
   for (const dest of destinations) {
