@@ -8,6 +8,25 @@ import { startMarketingPublishWorker } from "./marketing-publish-worker";
 const app = express();
 const httpServer = createServer(app);
 
+// Process-level safety net. A single uncaught exception or unhandled promise
+// rejection would otherwise terminate the Node process (Node >= 15 default),
+// which is exactly the crash signature seen on the LinkedIn OAuth callback
+// (HTTP 200 sent, then logs stop and the client sees ERR_CONNECTION_RESET).
+// We log loudly and stay up so one bad request cannot take the whole server
+// down. These are intentionally NOT silent — every occurrence is a bug to fix.
+process.on("unhandledRejection", (reason) => {
+  console.error(
+    "[process] UNHANDLED PROMISE REJECTION (server staying up — investigate):",
+    reason instanceof Error ? reason.stack || reason.message : reason,
+  );
+});
+process.on("uncaughtException", (err) => {
+  console.error(
+    "[process] UNCAUGHT EXCEPTION (server staying up — investigate):",
+    err instanceof Error ? err.stack || err.message : err,
+  );
+});
+
 declare module "http" {
   interface IncomingMessage {
     rawBody: unknown;

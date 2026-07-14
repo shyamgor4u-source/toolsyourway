@@ -9,6 +9,7 @@
     "start": "cross-env NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
     "smoke": "tsx script/smoke-publish.ts",
+    "smoke:linkedin": "tsx script/smoke-linkedin.ts",
     "db:push": "drizzle-kit push"
   },
   "dependencies": {

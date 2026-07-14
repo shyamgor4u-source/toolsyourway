@@ -14,9 +14,16 @@ import Replicate from "replicate";
 import { storage, dbReady } from "./storage";
 import { registerSchema, loginSchema } from "@shared/schema";
 import { setupAuth } from "./auth";
-import { getBaseUrl } from "./config";
+import { getBaseUrl, isBaseUrlConfigured } from "./config";
 import { buildDestinations, SUPPORTED_PLATFORMS, resolveDestinationMap } from "./social-destinations";
 import { discoverLinkedInOrganizations } from "./publish-service";
+import {
+  parseLinkedInState,
+  linkedinPopupHtml,
+  linkedinRedirectUri,
+  safeErrorMessage,
+  safeResponseText,
+} from "./linkedin-oauth";
 import { isPublishWorkerEnabled } from "./marketing-publish-worker";
 
 const MemoryStore = createMemoryStore(session);
@@ -1544,7 +1551,7 @@ Now respond to the user's latest message with the depth and specificity of a rea
       const linkedinState = process.env.LINKEDIN_CLIENT_ID
         ? Buffer.from(`${req.user!.id}:${Date.now()}:${Math.random().toString(36).slice(2)}`).toString("base64")
         : undefined;
-      const linkedinRedirect = `${getBaseUrl(req)}/api/social/linkedin/callback`;
+      const linkedinRedirect = linkedinRedirectUri(getBaseUrl(req));
       const oauthConfig: Record<string, { clientId?: string; authUrl?: string; oauthStart?: string }> = {
         linkedin: {
           clientId: process.env.LINKEDIN_CLIENT_ID,
@@ -1656,108 +1663,189 @@ Now respond to the user's latest message with the depth and specificity of a rea
   // LINKEDIN OAUTH CALLBACK — real token exchange + profile fetch
   // ============================================================
   app.get("/api/social/linkedin/callback", async (req: Request, res: Response) => {
-    try {
-      const { code, state, error, error_description } = req.query as any;
+    // Correlation id + timer so every stage of a single callback is greppable
+    // and its total duration is visible even when nothing errors.
+    const reqId = crypto.randomBytes(6).toString("hex");
+    const startedAt = Date.now();
 
-      // Helper that returns HTML that auto-closes the popup and notifies the parent window
-      const renderPopupResult = (success: boolean, msg: string) => `<!doctype html><html><head><meta charset="utf-8"><title>LinkedIn</title>
-<style>body{font-family:-apple-system,Inter,sans-serif;background:#FDFCF8;color:#1E1650;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center;padding:20px}
-.card{max-width:400px;background:white;padding:40px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,0.08)}
-.icon{width:56px;height:56px;border-radius:50%;margin:0 auto 16px;display:flex;align-items:center;justify-content:center;font-size:28px}
-.ok{background:#D1FAE5;color:#065F46}
-.err{background:#FEE2E2;color:#991B1B}
-h1{font-size:18px;margin:0 0 8px}
-p{color:#666;font-size:14px;margin:0}
-</style></head><body><div class="card">
-<div class="icon ${success ? "ok" : "err"}">${success ? "\u2713" : "\u2717"}</div>
-<h1>${success ? "LinkedIn Connected" : "Connection Failed"}</h1><p>${msg}</p><p style="margin-top:16px;font-size:12px">You can close this window.</p>
-</div><script>setTimeout(() => { if (window.opener) { window.opener.postMessage({ type:"linkedin-oauth", success:${success} }, "*"); } window.close(); }, 1500);</script></body></html>`;
-
-      if (error) {
-        console.warn("LinkedIn OAuth denied:", error, error_description);
-        return res.type("html").send(renderPopupResult(false, error_description || error));
-      }
-      if (!code) {
-        return res.type("html").send(renderPopupResult(false, "No authorization code received"));
-      }
-
-      // State should encode userId so we can attach the connection to the right user (session may not survive popup)
-      // Format: base64(userId:nonce)
-      let userId: number | undefined;
+    // Structured, secret-free stage logging. Never logs tokens/codes/secrets \u2014
+    // only booleans, lengths, HTTP statuses and safe error strings. Wrapped so
+    // logging itself can never throw and abort the callback.
+    const logStage = (stage: string, fields: Record<string, unknown> = {}) => {
       try {
-        const decoded = Buffer.from(String(state), "base64").toString("utf-8");
-        userId = parseInt(decoded.split(":")[0], 10);
-      } catch {}
-      if (!userId && req.isAuthenticated()) userId = req.user!.id;
-      if (!userId) {
-        return res.type("html").send(renderPopupResult(false, "Session expired \u2014 please try again"));
-      }
+        console.log(JSON.stringify({
+          evt: "linkedin_oauth_callback",
+          reqId,
+          ts: new Date().toISOString(),
+          stage,
+          ...fields,
+        }));
+      } catch { /* logging must never break the flow */ }
+    };
 
-      // Exchange code for access token
-      const redirectUri = `${getBaseUrl(req)}/api/social/linkedin/callback`;
-      const tokenRes = await fetch("https://www.linkedin.com/oauth/v2/accessToken", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          grant_type: "authorization_code",
-          code: String(code),
-          redirect_uri: redirectUri,
-          client_id: process.env.LINKEDIN_CLIENT_ID!,
-          client_secret: process.env.LINKEDIN_CLIENT_SECRET!,
-        }).toString(),
+    // Single, guarded responder. Refuses to double-send (which would otherwise
+    // throw "Cannot set headers after they are sent" and escape as an unhandled
+    // rejection) and swallows any render/send error after logging it.
+    const sendPopup = (success: boolean, msg: string, httpStatus = 200) => {
+      logStage("respond", { success, httpStatus });
+      if (res.headersSent) {
+        logStage("respond_skipped_headers_already_sent", { success });
+        return;
+      }
+      try {
+        res.status(httpStatus).type("html").send(linkedinPopupHtml(success, msg));
+      } catch (err) {
+        logStage("respond_error", { error: safeErrorMessage(err) });
+      }
+    };
+
+    try {
+      const { code, state, error, error_description } = req.query as Record<string, string | undefined>;
+      logStage("received", {
+        hasCode: Boolean(code),
+        hasState: Boolean(state),
+        stateLen: typeof state === "string" ? state.length : 0,
+        hasError: Boolean(error),
       });
 
-      if (!tokenRes.ok) {
-        const errText = await tokenRes.text();
-        console.error("LinkedIn token exchange failed:", errText);
-        return res.type("html").send(renderPopupResult(false, "Token exchange failed \u2014 check app credentials"));
+      // Provider-side denial / error (user hit "Cancel", scope rejected, etc.)
+      if (error) {
+        logStage("provider_error", { error: String(error).slice(0, 120) });
+        return sendPopup(false, error_description || error || "LinkedIn authorization was denied.");
+      }
+      if (!code) {
+        logStage("missing_code");
+        return sendPopup(false, "No authorization code received from LinkedIn. Please retry the connection.");
       }
 
-      const tokenData: any = await tokenRes.json();
-      const accessToken: string = tokenData.access_token;
+      // Resolve the initiating user. parseLinkedInState never throws and returns
+      // null for malformed/expired/missing state \u2014 a clean failure, not a crash.
+      const parsed = parseLinkedInState(state);
+      const usedSession = !parsed && req.isAuthenticated();
+      let userId: number | undefined = parsed?.userId;
+      if (!userId && req.isAuthenticated()) userId = req.user!.id;
+      logStage("state_resolved", {
+        stateParsed: Boolean(parsed),
+        usedSessionFallback: usedSession,
+        haveUserId: Boolean(userId),
+      });
+      if (!userId || !Number.isFinite(userId)) {
+        return sendPopup(false, "Your session expired before LinkedIn responded. Please close this window and connect again.");
+      }
+
+      // Server misconfiguration \u2014 surface an actionable message, never crash.
+      if (!process.env.LINKEDIN_CLIENT_ID || !process.env.LINKEDIN_CLIENT_SECRET) {
+        logStage("missing_credentials");
+        return sendPopup(false, "LinkedIn sign-in is not fully configured on the server. Please contact support.");
+      }
+
+      // Canonical redirect URI \u2014 must byte-match the value registered in the
+      // LinkedIn portal. Prefers BASE_URL (www) over the request host.
+      const redirectUri = linkedinRedirectUri(getBaseUrl(req));
+      logStage("redirect_uri_resolved", { usesBaseUrlEnv: isBaseUrlConfigured() });
+
+      // ---- Token exchange ----
+      let tokenData: any;
+      try {
+        const tokenRes = await fetch("https://www.linkedin.com/oauth/v2/accessToken", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            grant_type: "authorization_code",
+            code: String(code),
+            redirect_uri: redirectUri,
+            client_id: process.env.LINKEDIN_CLIENT_ID!,
+            client_secret: process.env.LINKEDIN_CLIENT_SECRET!,
+          }).toString(),
+        });
+        logStage("token_exchange", { ok: tokenRes.ok, status: tokenRes.status });
+        if (!tokenRes.ok) {
+          const errText = await safeResponseText(tokenRes);
+          console.error(`[linkedin ${reqId}] token exchange failed (${tokenRes.status}):`, errText.slice(0, 300));
+          return sendPopup(false, "Could not complete LinkedIn sign-in (token exchange failed). Verify the app's redirect URL matches exactly, then retry.");
+        }
+        tokenData = await tokenRes.json();
+      } catch (err) {
+        logStage("token_exchange_exception", { error: safeErrorMessage(err) });
+        return sendPopup(false, "Network error while contacting LinkedIn. Please try again in a moment.");
+      }
+
+      const accessToken: string | undefined = tokenData?.access_token;
+      if (!accessToken) {
+        logStage("no_access_token");
+        return sendPopup(false, "LinkedIn did not return an access token. Please retry the connection.");
+      }
       const refreshToken: string | undefined = tokenData.refresh_token;
       const expiresIn: number = tokenData.expires_in || 5184000; // 60 days default
 
-      // Fetch user profile (requires openid + profile scopes)
-      const profileRes = await fetch("https://api.linkedin.com/v2/userinfo", {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!profileRes.ok) {
-        const errText = await profileRes.text();
-        console.error("LinkedIn profile fetch failed:", errText);
-        return res.type("html").send(renderPopupResult(false, "Profile fetch failed"));
+      // ---- Profile fetch ----
+      let profile: any;
+      try {
+        const profileRes = await fetch("https://api.linkedin.com/v2/userinfo", {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        logStage("profile_fetch", { ok: profileRes.ok, status: profileRes.status });
+        if (!profileRes.ok) {
+          const errText = await safeResponseText(profileRes);
+          console.error(`[linkedin ${reqId}] profile fetch failed (${profileRes.status}):`, errText.slice(0, 300));
+          return sendPopup(false, "Signed in to LinkedIn but could not read your profile. Please retry.");
+        }
+        profile = await profileRes.json();
+      } catch (err) {
+        logStage("profile_fetch_exception", { error: safeErrorMessage(err) });
+        return sendPopup(false, "Network error while reading your LinkedIn profile. Please try again.");
       }
-      const profile: any = await profileRes.json();
+      if (!profile?.sub) {
+        logStage("profile_incomplete");
+        return sendPopup(false, "LinkedIn returned an incomplete profile. Please retry the connection.");
+      }
 
-      // Best-effort: discover LinkedIn Pages (organizations) the member admins.
-      // Only succeeds if the app/token has an organization scope; otherwise
-      // returns no pages (and a permission note) without failing the connect.
-      const orgDiscovery = await discoverLinkedInOrganizations(accessToken);
-      const pagesJson = orgDiscovery.pages.length ? JSON.stringify(orgDiscovery.pages) : null;
+      // ---- Best-effort Page (organization) discovery \u2014 never fatal ----
+      let orgPages: Array<{ id: string; name: string; type: string; pictureUrl?: string }> = [];
+      try {
+        const orgDiscovery = await discoverLinkedInOrganizations(accessToken);
+        orgPages = orgDiscovery.pages;
+      } catch (err) {
+        logStage("org_discovery_exception", { error: safeErrorMessage(err) });
+      }
+      const pagesJson = orgPages.length ? JSON.stringify(orgPages) : null;
 
-      // Store connection with real token and real profile pic
-      await storage.connectSocial({
-        userId,
-        platform: "linkedin",
-        accountId: profile.sub,
-        accountName: profile.name,
-        displayName: profile.name,
-        profilePictureUrl: profile.picture || null,
-        profileUrl: `https://www.linkedin.com/in/${profile.sub}`,
-        accountType: "profile",
-        pages: pagesJson,
-        accessToken,
-        refreshToken: refreshToken || null,
-        expiresAt: new Date(Date.now() + expiresIn * 1000).toISOString(),
-      });
+      // ---- Persist the connection ----
+      try {
+        await dbReady; // ensure schema init finished before first write
+        await storage.connectSocial({
+          userId,
+          platform: "linkedin",
+          accountId: profile.sub,
+          accountName: profile.name,
+          displayName: profile.name,
+          profilePictureUrl: profile.picture || null,
+          profileUrl: `https://www.linkedin.com/in/${profile.sub}`,
+          accountType: "profile",
+          pages: pagesJson,
+          accessToken,
+          refreshToken: refreshToken || null,
+          expiresAt: new Date(Date.now() + expiresIn * 1000).toISOString(),
+        });
+        logStage("db_save", { ok: true, pageCount: orgPages.length });
+      } catch (err) {
+        logStage("db_save_failed", { error: safeErrorMessage(err) });
+        console.error(`[linkedin ${reqId}] DB save failed:`, safeErrorMessage(err));
+        return sendPopup(false, "Signed in to LinkedIn, but saving the connection failed (storage error, code DB_SAVE). Please try again shortly.");
+      }
 
-      const pageMsg = orgDiscovery.pages.length
-        ? ` Found ${orgDiscovery.pages.length} LinkedIn Page${orgDiscovery.pages.length === 1 ? "" : "s"}.`
+      const pageMsg = orgPages.length
+        ? ` Found ${orgPages.length} LinkedIn Page${orgPages.length === 1 ? "" : "s"}.`
         : "";
-      res.type("html").send(renderPopupResult(true, `Welcome, ${profile.name}. You can now post to LinkedIn from ToolsYourWay.${pageMsg}`));
-    } catch (e: any) {
-      console.error("LinkedIn callback error:", e);
-      res.type("html").send(`<!doctype html><html><body><p>Error: ${e.message}</p><script>window.close();</script></body></html>`);
+      logStage("success", { durationMs: Date.now() - startedAt, pageCount: orgPages.length });
+      return sendPopup(true, `Welcome, ${profile.name}. You can now post to LinkedIn from ToolsYourWay.${pageMsg}`);
+    } catch (e) {
+      // Last-resort net: nothing below the route handler should ever be able to
+      // crash the process. Log loudly with the correlation id and still return
+      // a friendly popup.
+      logStage("unhandled_exception", { error: safeErrorMessage(e), durationMs: Date.now() - startedAt });
+      console.error(`[linkedin ${reqId}] unhandled callback error:`, e);
+      return sendPopup(false, "Something went wrong finishing your LinkedIn connection. Please try again.");
     }
   });
 
@@ -1767,7 +1855,7 @@ p{color:#666;font-size:14px;margin:0}
       return res.status(400).json({ message: "LINKEDIN_CLIENT_ID not configured", configured: false });
     }
     const state = Buffer.from(`${req.user!.id}:${Date.now()}:${Math.random().toString(36).slice(2)}`).toString("base64");
-    const redirectUri = `${getBaseUrl(req)}/api/social/linkedin/callback`;
+    const redirectUri = linkedinRedirectUri(getBaseUrl(req));
     const authUrl = `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${process.env.LINKEDIN_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(linkedinScope())}&state=${state}`;
     res.json({ authUrl, state, configured: true });
   });

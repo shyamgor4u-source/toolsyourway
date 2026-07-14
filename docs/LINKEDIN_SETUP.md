@@ -18,9 +18,15 @@ This guide walks through setting up LinkedIn OAuth so users of ToolsYourWay can 
 1. Open your new app's dashboard
 2. Go to the **Auth** tab
 3. Under **OAuth 2.0 settings → Authorized redirect URLs**, add:
-   - `https://toolsyourway.com/api/social/linkedin/callback` (production)
+   - `https://www.toolsyourway.com/api/social/linkedin/callback` (production — **must be the `www` origin, matching `BASE_URL`**)
    - `http://localhost:5000/api/social/linkedin/callback` (local development)
 4. Save the changes
+
+> **Must match `BASE_URL` exactly.** The server builds the callback's
+> `redirect_uri` from `BASE_URL` (see Step 4). Since `BASE_URL` is
+> `https://www.toolsyourway.com`, the redirect URL registered here must be the
+> **`www`** form. A non-`www` entry (e.g. `https://toolsyourway.com/...`) will
+> cause LinkedIn to reject the token exchange with "redirect_uri mismatch".
 
 ## Step 3: Request Required Products
 
